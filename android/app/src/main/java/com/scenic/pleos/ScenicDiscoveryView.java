@@ -14,6 +14,7 @@ public final class ScenicDiscoveryView {
     public interface Host {
         boolean canInteract();
         void chooseDestination(DestinationPlace place,String theme,int extraMinutes);
+        default void searchDestination(){openAiPlanner();}
         void openAiPlanner(); void startSampleJourney(); void openRecap(); void openNearby();
         java.util.List<ScenicCaptureStore.Record> records();
         default String originLabel(){return "경로에서 선택한 출발지";}
@@ -36,7 +37,8 @@ public final class ScenicDiscoveryView {
     private void render(){
         if(body==null)return;body.removeAllViews();
         LinearLayout hero=wide?row():col();hero.setGravity(Gravity.TOP);
-        LinearLayout intro=col();intro.setPadding(dp(8),dp(10),dp(24),dp(18));intro.addView(text("DISCOVER YOUR NEXT DRIVE",12,TEAL,true));gap(intro,12);intro.addView(text("마음에 드는 풍경에서,\n다음 드라이브를 시작하세요.",32,INK,true));gap(intro,12);intro.addView(text("풍경으로 고르고 · 가는 길을 비교하고 · 좋은 순간을 간직해요.",17,MUTED,false));gap(intro,18);
+        LinearLayout intro=col();intro.setPadding(dp(8),dp(10),dp(24),dp(18));intro.addView(text("DISCOVER YOUR NEXT DRIVE",12,TEAL,true));gap(intro,12);intro.addView(text("마음에 드는 풍경에서,\n다음 드라이브를 시작하세요.",32,INK,true));gap(intro,12);intro.addView(text("목적지를 검색하고 · 주변 풍경 사진을 고르고 · 그곳을 거쳐 도착해요.",17,MUTED,false));gap(intro,18);
+        intro.addView(button("목적지 검색 · 풍경 사진 찾기  ⌕",true,host::searchDestination),size(-1,-2));gap(intro,10);
         LinearLayout actions=row();actions.addView(button("AI 코스 찾기  ↗",true,host::openAiPlanner));space(actions,10);actions.addView(button("도착지 맛집·주차",false,host::openNearby));intro.addView(actions);
         if(wide)hero.addView(intro,new LinearLayout.LayoutParams(0,-2,1.35f));else hero.addView(intro);
         LinearLayout recap=col();recap.setPadding(dp(24),dp(22),dp(24),dp(22));recap.setBackground(bg(0xffe3eee7,0));recap.addView(text("DRIVE → CAPTURE → RECAP",12,TEAL,true));gap(recap,12);recap.addView(text("오늘의 풍경이\n이번 달의 추억으로",25,INK,true));gap(recap,10);recap.addView(text("내 영상을 골라 음악과 기억을 더해 보세요.\n샘플 자동 기록 체험도 준비되어 있어요.",15,MUTED,false));gap(recap,16);recap.addView(button("내 영상으로 리캡 만들기",true,host::openRecap),size(-1,-2));gap(recap,8);recap.addView(button("자동 기록 체험 · 18초",false,host::startSampleJourney),size(-1,-2));gap(recap,8);recap.addView(button("나의 월간 리캡  ·  샘플 기록 "+host.records().size()+"개",false,host::openRecap),size(-1,-2));

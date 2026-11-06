@@ -3,6 +3,7 @@ import {readFile,stat,realpath} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {ApiError,providerStatus,fetchRoadRoute,fetchPlaces} from './providers.mjs';
+import {createScenicSelectionSigner} from './scenic-photos.mjs';
 const root=path.resolve(fileURLToPath(new URL('../web/',import.meta.url)));
 const insideRoot=file=>file===root||file.startsWith(root+path.sep);
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp','.jpg':'image/jpeg','.mp3':'audio/mpeg','.wav':'audio/wav','.woff2':'font/woff2','.ttf':'font/ttf'};
@@ -16,6 +17,7 @@ async function readJson(req){
   try{return JSON.parse(Buffer.concat(chunks,bytes).toString('utf8'));}catch{throw new ApiError('JSON 형식이 올바르지 않습니다.');}
 }
 export function createServer({env=process.env,fetchImpl=fetch}={}){
+  const selectionSigner=createScenicSelectionSigner();
   return http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
     try{
@@ -51,7 +53,11 @@ export function createServer({env=process.env,fetchImpl=fetch}={}){
         }
         if(url.pathname==='/api/destination-routes'&&req.method==='POST'){
           const {planDestinationRoutes}=await import('./destination-routes.mjs');
-          return json(res,200,await planDestinationRoutes(await readJson(req),{env,fetchImpl}));
+          return json(res,200,await planDestinationRoutes(await readJson(req),{env,fetchImpl,selectionSigner}));
+        }
+        if(url.pathname==='/api/scenic-photos'&&req.method==='POST'){
+          const {findScenicPhotos}=await import('./scenic-photos.mjs');
+          return json(res,200,await findScenicPhotos(await readJson(req),{env,fetchImpl,selectionSigner}));
         }
         if(url.pathname==='/api/route'&&req.method==='POST')return json(res,200,await fetchRoadRoute(await readJson(req),{env,fetchImpl}));
         if(url.pathname==='/api/recommend'&&req.method==='POST'){

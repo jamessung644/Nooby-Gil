@@ -42,6 +42,11 @@ public final class JourneyState {
         id=UUID.randomUUID().toString();title=course.name;stops.clear();stops.addAll(next);target=primary=next.get(next.size()-1);restaurant=parking=null;roundTrip=returnToOrigin;
     }
     public void selectNearbyAnchor(DestinationPlace place){if(place==null)throw new IllegalArgumentException("Anchor required");primary=place;restaurant=parking=null;}
+    /** A chosen photograph adds a visit before the original destination; it never replaces it. */
+    public void setScenicWaypoint(DestinationPlace waypoint){
+        if(target==null)throw new IllegalStateException("Choose a destination first");
+        stops.clear();if(waypoint!=null)stops.add(waypoint);stops.add(target);
+    }
     public void visitRestaurant(DestinationPlace place){if(place==null)throw new IllegalArgumentException("Restaurant required");restaurant=target=place;parking=null;}
     public void visitParking(DestinationPlace place,DestinationPlace food){if(place==null)throw new IllegalArgumentException("Parking required");restaurant=food;parking=target=place;}
     public String serialize(){

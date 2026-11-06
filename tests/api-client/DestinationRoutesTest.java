@@ -157,6 +157,18 @@ public final class DestinationRoutesTest {
         JSONObject sparse=response();route(sparse,1).put("coordinates",new JSONArray("[[35.1151,129.0414],[35.13,129.09],[35.13,129.11],[35.1587,129.1604]]"));
         check(DestinationRoutePlan.parse(sparse,publicPlace,LAT,LON,30,"coast").scenic!=null,"Pass-through lies on a segment even when no vertex is nearby");
 
+        DestinationPlace chosenPhotoPlace=DestinationPlace.of("12345","해안 통과 지점","부산",35.13,129.10);
+        check(DestinationRoutePlan.parse(response(),publicPlace,LAT,LON,30,"coast",chosenPhotoPlace).scenic!=null,"Selected photograph's exact POI can be used");
+        for(DestinationPlace other:new DestinationPlace[]{DestinationPlace.of("other","해안 통과 지점","",35.13,129.10),DestinationPlace.of("12345","다른 장소","",35.13,129.10),DestinationPlace.of("12345","해안 통과 지점","",35.13001,129.10)}){
+            try{DestinationRoutePlan.parse(response(),publicPlace,LAT,LON,30,"coast",other);throw new AssertionError("Do not substitute a photo-selected waypoint");}catch(JSONException expected){checks++;}
+        }
+        check(DestinationRoutePlan.parse(disabled,publicPlace,LAT,LON,0,"all",chosenPhotoPlace).scenic==null,"Zero detour stays disabled even with photo metadata");
+        JSONObject unavailable=response().put("routes",new JSONArray().put(route(response(),0))).put("scenicStatus","no_feasible_route");
+        check(DestinationRoutePlan.parse(unavailable,publicPlace,LAT,LON,30,"coast",chosenPhotoPlace).scenic==null,"An unreachable selected photo returns only explicit unavailable scenery");
+        JSONObject distantRoad=response();route(distantRoad,1).put("coordinates",new JSONArray("[[35.1151,129.0414],[35.127,129.10],[35.1587,129.1604]]"));
+        check(DestinationRoutePlan.parse(distantRoad,publicPlace,LAT,LON,30,"coast").scenic!=null,"General candidate remains within legacy road proximity allowance");
+        try{DestinationRoutePlan.parse(distantRoad,publicPlace,LAT,LON,30,"coast",chosenPhotoPlace);throw new AssertionError("Selected photo needs closer road evidence");}catch(JSONException expected){checks++;}
+
         URL.setURLStreamHandlerFactory(protocol->!protocol.equals("http")&&!protocol.equals("https")?null:new URLStreamHandler(){
             protected java.net.URLConnection openConnection(URL url){Connection next=connections.remove();next.endpoint(url);return next;}
         });
@@ -172,6 +184,19 @@ public final class DestinationRoutesTest {
         check(body.getJSONObject("origin").getDouble("lat")==LAT&&body.getJSONObject("destination").getString("id").equals(publicPlace.id),"Preserve explicitly supplied public origin and destination identity");
         check(body.getInt("extraMinutes")==30&&body.getString("theme").equals("coast"),"Keep detour time separate from a total-trip budget");
         check(request.getReadTimeout()==70000&&!request.getInstanceFollowRedirects()&&!request.getUseCaches()&&request.disconnected,"Provider comparison allows the server 50-second deadline and cleanup margin");
+        String token="eyJ2IjoxfQ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        Connection selectedRequest=enqueue(response().toString());client.destinationRoutes(LAT,LON,publicPlace,30,"coast",token);
+        JSONObject selectedBody=new JSONObject(new String(selectedRequest.output.toByteArray(),StandardCharsets.UTF_8));
+        check(selectedBody.length()==5&&selectedBody.getString("scenicSelection").equals(token),"Pass server selection token unchanged");
+        check(selectedBody.getJSONObject("destination").getString("id").equals(publicPlace.id)&&!selectedBody.has("waypoints"),"Photo choice never overwrites final destination or sends arbitrary waypoints");
+        rejectRequest(()->client.destinationRoutes(LAT,LON,publicPlace,30,"coast","invalid"),"Reject malformed scenic token before network");
+        Connection photos=enqueue("{}");client.scenicPhotos(publicPlace,10000);
+        JSONObject photoBody=new JSONObject(new String(photos.output.toByteArray(),StandardCharsets.UTF_8));
+        check(photos.getURL().getPath().equals("/api/scenic-photos")&&photos.getRequestMethod().equals("POST"),"Explicit destination photo endpoint");
+        check(photoBody.length()==2&&!photoBody.has("origin")&&photoBody.getJSONObject("destination").getString("id").equals(publicPlace.id),"Photo query sends chosen destination, never current GPS");
+        check(photoBody.getInt("radiusMeters")==10000&&photos.getReadTimeout()==90000,"Bound radius and vision request timeout");
+        rejectRequest(()->client.scenicPhotos(null,10000),"Need a chosen destination for photo query");
+        rejectRequest(()->client.scenicPhotos(publicPlace,50000),"Do not request unsupported photo radius");
         for(String theme:new String[]{"all","coast","forest","mountain","water","countryside","city"}){
             Connection themedRequest=enqueue(response().toString());
             client.destinationRoutes(LAT,LON,publicPlace,30,theme);
