@@ -30,6 +30,11 @@ export function createServer({env=process.env,fetchImpl=fetch}={}){
         const old=visits.get(ip);const count=old?.minute===minute?old.count+1:1;
         visits.set(ip,{minute,count});if(count>60)throw new ApiError('요청이 많습니다. 잠시 후 다시 시도해 주세요.',429);
         if(url.pathname==='/api/status'&&req.method==='GET')return json(res,200,providerStatus(env));
+        if(url.pathname==='/api/nearby'&&req.method==='GET'){
+          if(!url.searchParams.has('lat')||!url.searchParams.has('lon'))throw new ApiError('검색할 위치가 필요합니다.');
+          const {searchNearby}=await import('./nearby.mjs');
+          return json(res,200,await searchNearby({kind:url.searchParams.get('kind'),lat:Number(url.searchParams.get('lat')),lon:Number(url.searchParams.get('lon'))},{env,fetchImpl}));
+        }
         if(url.pathname==='/api/catalog'&&req.method==='GET'){
           const {getPreparedCatalog}=await import('./android-catalog.mjs');
           return json(res,200,getPreparedCatalog());
