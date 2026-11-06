@@ -1,0 +1,1 @@
+{"name":"SCENIC · 드라이브 코스","short_name":"SCENIC","description":"코스 탐색, 경로 시뮬레이션, 합성 사운드와 영상 기록을 제공하는 보조 웹 데모","id":"./","start_url":"./","scope":"./","display":"standalone","background_color":"#f5f5f5","theme_color":"#f5f5f5","lang":"ko","icons":[{"src":"./assets/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]}

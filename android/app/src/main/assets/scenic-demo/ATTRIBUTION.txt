@@ -1,0 +1,29 @@
+SCENIC offline sample photographs
+These are existing photographs of Busan used as demo assets. They were not captured by SCENIC, the user's vehicle, or another SCENIC driver. No actual camera capture or public sharing is implied.
+
+haeundae.jpg — Busan City Haeundae Beach.jpg
+Creator: Busan Metropolitan City (부산광역시)
+License: Korea Open Government License Type 1 (attribution)
+License URL: https://www.kogl.or.kr/info/licenseType1.do
+Source: https://commons.wikimedia.org/wiki/File:Busan_City_Haeundae_Beach.jpg
+Original institutional source: https://www.kogl.or.kr/recommend/recommendDivView.do?recommendIdx=17856&division=img
+Original JPEG unchanged. The application may display an aspect-ratio crop.
+
+gwangalli.jpg — Gwangalli Beach and Gwangan Bridge Busan.jpg
+Creator: Masterhatch
+License: Creative Commons Attribution-ShareAlike 4.0 International
+License URL: https://creativecommons.org/licenses/by-sa/4.0/
+Source: https://commons.wikimedia.org/wiki/File:Gwangalli_Beach_and_Gwangan_Bridge_Busan.jpg
+Creator URL: https://commons.wikimedia.org/wiki/User:Masterhatch
+Wikimedia-provided 1280px reduced image. No additional image editing. The application may display an aspect-ratio crop. The image and any image adaptation are distributed under CC BY-SA 4.0.
+
+coast.jpg — Cheongsapo.jpg
+Creator: Andrewssi2
+License: Creative Commons Attribution-ShareAlike 3.0 Unported
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+Source: https://commons.wikimedia.org/wiki/File:Cheongsapo.jpg
+Creator URL: https://commons.wikimedia.org/wiki/User:Andrewssi2
+Wikimedia-provided 1280px reduced image. No additional image editing. The application may display an aspect-ratio crop. The image and any image adaptation are distributed under CC BY-SA 3.0.
+This photograph depicts Cheongsapo harbour, not a driver's road view.
+
+Downloaded and checked: 2026-11-05. Attribution does not imply endorsement.

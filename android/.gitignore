@@ -1,0 +1,7 @@
+.gradle/
+.gradle-home/
+.gradle-project/
+local.properties
+app/build/
+build/
+*.jks

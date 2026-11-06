@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>SCENIC · Kakao 지도</title>
+  <link rel="stylesheet" href="/kakao-map.css">
+  <!-- Install the native scene setter before onPageFinished, even while the SDK loads. -->
+  <script src="/kakao-map.js"></script>
+</head>
+<body>
+  <main class="map-page">
+    <header class="map-header">
+      <div class="map-heading">
+        <h1 id="map-title">여정 지도</h1>
+        <p id="map-detail">선택한 경로를 기다리고 있어요.</p>
+      </div>
+      <button id="map-retry" type="button" aria-label="지도 연결 새로고침">새로고침</button>
+    </header>
+    <section class="map-shell" aria-label="코스와 현재 위치 지도">
+      <div id="map-canvas" aria-label="Kakao 지도" hidden></div>
+      <div id="map-message" class="map-message" role="status" aria-live="polite">
+        <div class="message-icon" aria-hidden="true">⌖</div>
+        <h2 id="map-message-title">지도를 준비하고 있어요</h2>
+        <p id="map-message-detail">잠시만 기다려 주세요.</p>
+      </div>
+    </section>
+    <!-- Outside the map canvas: never cover Kakao's attribution or built-in controls. -->
+    <footer class="map-footer">
+      <span>Kakao 지도 · 경로 미리보기</span>
+      <span id="map-location">기본 화면 · 현재 위치 아님</span>
+    </footer>
+  </main>
+</body>
+</html>
