@@ -30,4 +30,21 @@ final class NavigationHandoffPlan {
         double h=Math.sin(lat/2)*Math.sin(lat/2)+Math.cos(Math.toRadians(expected.lat))*Math.cos(Math.toRadians(latitude))*Math.sin(lon/2)*Math.sin(lon/2);
         return 12742000*Math.atan2(Math.sqrt(h),Math.sqrt(Math.max(0,1-h)))<=200;
     }
+    static final class ReturnedWaypoint {
+        final String name;final double lat,lon;final Double displayLat,displayLon;
+        ReturnedWaypoint(String name,double lat,double lon,Double displayLat,Double displayLon){
+            this.name=name;this.lat=lat;this.lon=lon;this.displayLat=displayLat;this.displayLon=displayLon;
+        }
+    }
+    /** A distinct partial result: names/order are known, but no waypoint position is verified. */
+    static boolean confirmsOnlyWaypointNames(boolean destinationConfirmed,List<DestinationPlace> expected,List<ReturnedWaypoint> returned){
+        if(!destinationConfirmed||expected==null||expected.isEmpty()||returned==null||expected.size()!=returned.size())return false;
+        for(int i=0;i<expected.size();i++){
+            DestinationPlace want=expected.get(i);ReturnedWaypoint got=returned.get(i);
+            if(want==null||got==null||want.name==null||got.name==null||!want.name.trim().equals(got.name.trim())
+                    ||got.lat!=0||got.lon!=0||!missingCoordinate(got.displayLat)||!missingCoordinate(got.displayLon))return false;
+        }
+        return true;
+    }
+    private static boolean missingCoordinate(Double value){return value==null||value==0;}
 }

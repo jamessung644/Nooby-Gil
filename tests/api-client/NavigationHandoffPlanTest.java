@@ -31,6 +31,27 @@ public final class NavigationHandoffPlanTest {
         check(!NavigationHandoffPlan.matches(end,37.5665,Double.POSITIVE_INFINITY),"infinite callback rejected");
         check(!NavigationHandoffPlan.matches(null,37.5665,126.9780),"missing expected destination rejected");
         try{plan.waypoints.clear();throw new AssertionError("caller changed immutable trip");}catch(UnsupportedOperationException expected){checks++;}
+        NavigationHandoffPlan.ReturnedWaypoint missingFirst=new NavigationHandoffPlan.ReturnedWaypoint(first.name,0,0,null,null);
+        NavigationHandoffPlan.ReturnedWaypoint missingSecond=new NavigationHandoffPlan.ReturnedWaypoint(second.name,0,0,0.0,0.0);
+        check(NavigationHandoffPlan.confirmsOnlyWaypointNames(true,plan.waypoints,Arrays.asList(missingFirst,missingSecond)),"zero/null positions produce only a name/order confirmation");
+        check(!NavigationHandoffPlan.confirmsOnlyWaypointNames(false,plan.waypoints,Arrays.asList(missingFirst,missingSecond)),"partial result requires independently confirmed destination coordinates");
+        check(!NavigationHandoffPlan.confirmsOnlyWaypointNames(true,plan.waypoints,Arrays.asList(missingSecond,missingFirst)),"wrong name order remains unconfirmed");
+        check(!NavigationHandoffPlan.confirmsOnlyWaypointNames(true,plan.waypoints,Collections.singletonList(missingFirst)),"missing waypoint remains unconfirmed");
+        check(!NavigationHandoffPlan.confirmsOnlyWaypointNames(true,plan.waypoints,Arrays.asList(missingFirst,missingSecond,missingFirst)),"extra waypoint remains unconfirmed");
+        check(!NavigationHandoffPlan.confirmsOnlyWaypointNames(true,plan.waypoints,Arrays.asList(missingFirst,null)),"null waypoint remains unconfirmed");
+        check(!NavigationHandoffPlan.confirmsOnlyWaypointNames(true,Collections.emptyList(),Collections.emptyList()),"direct route cannot produce a waypoint partial result");
+        check(!NavigationHandoffPlan.confirmsOnlyWaypointNames(true,plan.waypoints,null),"no callback is not a partial confirmation");
+        for(NavigationHandoffPlan.ReturnedWaypoint invalid:new NavigationHandoffPlan.ReturnedWaypoint[]{
+                new NavigationHandoffPlan.ReturnedWaypoint("different",0,0,null,null),
+                new NavigationHandoffPlan.ReturnedWaypoint(null,0,0,null,null),
+                new NavigationHandoffPlan.ReturnedWaypoint(first.name,first.lat,first.lon,null,null),
+                new NavigationHandoffPlan.ReturnedWaypoint(first.name,0,first.lon,null,null),
+                new NavigationHandoffPlan.ReturnedWaypoint(first.name,Double.NaN,0,null,null),
+                new NavigationHandoffPlan.ReturnedWaypoint(first.name,0,0,Double.NaN,null),
+                new NavigationHandoffPlan.ReturnedWaypoint(first.name,0,0,first.lat,first.lon),
+                new NavigationHandoffPlan.ReturnedWaypoint(first.name,0,0,null,Double.POSITIVE_INFINITY)}){
+            check(!NavigationHandoffPlan.confirmsOnlyWaypointNames(true,plan.waypoints,Arrays.asList(invalid,missingSecond)),"partial path never accepts a name mismatch, mixed response, or nonzero/invalid coordinate");
+        }
         System.out.println("NavigationHandoffPlanTest: "+checks+" checks passed");
     }
 }

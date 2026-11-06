@@ -37,6 +37,7 @@ public final class PleosNavigationBridge {
     private NaviHelper helper;
     private NaviHelperEventListener listener;
     private NavigationHandoffPlan plan;
+    private List<NavigationHandoffPlan.ReturnedWaypoint> returnedWaypoints;
     private boolean busy,destroyed,sent,sawRouteEvent,destinationConfirmed,waypointsConfirmed;
     private int generation;
     private String message="선택한 목적지와 경유지를 순정 내비로 보낼 수 있어요.";
@@ -64,7 +65,7 @@ public final class PleosNavigationBridge {
         for(String permission:new String[]{"pleos.car.permission.NAVI_ROUTE","pleos.car.permission.NAVI_ROUTE_SEARCH","pleos.car.permission.NAVI_CUSTOM_MAP"}){
             if(activity.checkSelfPermission(permission)!=PackageManager.PERMISSION_GRANTED){update("순정 내비 사용 권한이 연결되지 않았어요. Pleos 앱 권한과 SDK 설정을 확인해 주세요.");return;}
         }
-        release();plan=next;busy=true;sent=false;sawRouteEvent=false;destinationConfirmed=false;waypointsConfirmed=false;
+        release();plan=next;returnedWaypoints=null;busy=true;sent=false;sawRouteEvent=false;destinationConfirmed=false;waypointsConfirmed=false;
         final int token=++generation;
         update("순정 내비에 연결하고 있어요…");
         main.postDelayed(timeout,45000);
@@ -86,6 +87,9 @@ public final class PleosNavigationBridge {
                 });}
                 @Override public void onWayPointInfo(List<WaypointInfo> points){main.post(()->{
                     if(!current(token)||!sent||!sawRouteEvent||points==null)return;
+                    returnedWaypoints=new ArrayList<>();
+                    for(WaypointInfo point:points)returnedWaypoints.add(point==null?null:new NavigationHandoffPlan.ReturnedWaypoint(
+                            point.getName(),point.getLatitude(),point.getLongitude(),point.getDisplayLatitude(),point.getDisplayLongitude()));
                     waypointsConfirmed=points.size()==plan.waypoints.size();
                     if(waypointsConfirmed)for(int i=0;i<points.size();i++){
                         WaypointInfo point=points.get(i);
@@ -130,7 +134,12 @@ public final class PleosNavigationBridge {
         catch(RuntimeException|LinkageError unavailable){finish("순정 내비에 요청했지만 최종 경로를 확인하지 못했어요. 내비 화면에서 확인해 주세요.");}
     }
     private void completeIfConfirmed(){
-        if(!busy||!destinationConfirmed||!waypointsConfirmed)return;
+        if(!busy||!destinationConfirmed)return;
+        if(!waypointsConfirmed){
+            if(NavigationHandoffPlan.confirmsOnlyWaypointNames(destinationConfirmed,plan.waypoints,returnedWaypoints))
+                finish("목적지와 경유지 이름·순서를 확인했어요. 경유지 좌표를 받지 못해 내비 화면에서 위치를 확인해 주세요.");
+            return;
+        }
         int count=plan.waypoints.size();
         finish(count==0?"순정 내비에서 목적지 설정을 확인했어요.":"순정 내비에서 목적지와 경유지 "+count+"곳의 설정을 확인했어요.");
     }
