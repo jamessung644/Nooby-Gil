@@ -50,7 +50,7 @@ test('parking prefers public-name evidence over closer shop lots, then distance,
     assert.equal(url.searchParams.get('category_group_code'), 'PK6'); assert.equal(url.searchParams.get('radius'), '3000');
     return Response.json({ documents });
   } });
-  assert.equal(result.places.length, 10); assert.equal(result.ranking, 'public_label_then_distance');
+  assert.equal(result.places.length, 10); assert.equal(result.ranking, 'availability_then_public_label_then_distance');
   assert.deepEqual(result.places.slice(0, 6).map(p => p.id), ['820', '802', '821', '822', '823', '824']);
   assert.deepEqual(result.places.slice(6, 8).map(p => p.id), ['803', '801']);
   assert.ok(result.places.every(p => p.parkingStatus === 'unknown' && !('free' in p) && !('open' in p) && !('remainingSpaces' in p)));

@@ -92,7 +92,7 @@ const domainClasses = [
   'ApiRequestGate', 'CourseEngine', 'DestinationPlace', 'DestinationRoutePlan',
   'EndpointPolicy', 'DriveRegion', 'JourneyState', 'LivePlan', 'LivePlanOrigin', 'LocationFixPolicy',
   'MusicContext', 'MusicPlaylist', 'MusicRecommendationState', 'NationwideCatalog',
-  'NavigationHandoffPlan', 'ParkingEvidenceStore', 'PersonalVideoStore', 'RouteProjection',
+  'NavigationHandoffPlan', 'ParkingAvailability', 'ParkingEvidenceStore', 'ParkingReroutePolicy', 'PersonalVideoStore', 'RouteProjection',
   'ScenicApiClient', 'ScenicCaptureStore', 'ScenicEvidence', 'ScenicLayoutPolicy', 'ScenicPhotoCollection',
   'StrictJson', 'VehicleSafety',
 ];

@@ -1,0 +1,81 @@
+SCENIC 지역 카드 사진
+
+region-gangneung.jpg — 경포호(철새도래지)
+제공: 한국관광공사 TourAPI
+공공누리 제1유형 (출처표시)
+촬영자: 개별 촬영자 정보 미제공
+원본: https://tong.visitkorea.or.kr/cms/resource_photo/50/4118550_image2_1.jpg
+출처: https://www.data.go.kr/data/15101578/openapi.do
+이용조건: https://www.kogl.or.kr/info/license.do
+확인: 2026-11-06T14:18:12.176Z
+가로세로 비율 유지 축소·JPEG 압축. 카드에서는 중앙 맞춤 표시.
+
+region-sokcho-yangyang.jpg — 낙산해수욕장
+제공: 한국관광공사 TourAPI
+공공누리 제1유형 (출처표시)
+촬영자: 개별 촬영자 정보 미제공
+원본: https://tong.visitkorea.or.kr/cms/resource/86/4120386_image2_1.jpg
+출처: https://www.data.go.kr/data/15101578/openapi.do
+이용조건: https://www.kogl.or.kr/info/license.do
+확인: 2026-11-06T14:18:12.375Z
+가로세로 비율 유지 축소·JPEG 압축. 카드에서는 중앙 맞춤 표시.
+
+region-yeosu.jpg — 한려해상국립공원 (오동도)
+제공: 한국관광공사 TourAPI
+공공누리 제1유형 (출처표시)
+촬영자: 개별 촬영자 정보 미제공
+원본: https://tong.visitkorea.or.kr/cms/resource_photo/77/3544277_image2_1.JPG
+출처: https://www.data.go.kr/data/15101578/openapi.do
+이용조건: https://www.kogl.or.kr/info/license.do
+확인: 2026-11-06T14:18:12.566Z
+가로세로 비율 유지 축소·JPEG 압축. 카드에서는 중앙 맞춤 표시.
+
+region-namhae.jpg — 남해 물건리 방조어부림
+제공: 한국관광공사 TourAPI
+공공누리 제1유형 (출처표시)
+촬영자: 개별 촬영자 정보 미제공
+원본: https://tong.visitkorea.or.kr/cms/resource_photo/41/3311341_image2_1.jpg
+출처: https://www.data.go.kr/data/15101578/openapi.do
+이용조건: https://www.kogl.or.kr/info/license.do
+확인: 2026-11-06T14:18:12.723Z
+가로세로 비율 유지 축소·JPEG 압축. 카드에서는 중앙 맞춤 표시.
+
+region-gyeongju.jpg — 경주 동궁과 월지
+제공: 한국관광공사 TourAPI
+공공누리 제1유형 (출처표시)
+촬영자: 개별 촬영자 정보 미제공
+원본: https://tong.visitkorea.or.kr/cms/resource_photo/62/3020462_image2_1.jpg
+출처: https://www.data.go.kr/data/15101578/openapi.do
+이용조건: https://www.kogl.or.kr/info/license.do
+확인: 2026-11-06T14:18:12.923Z
+가로세로 비율 유지 축소·JPEG 압축. 카드에서는 중앙 맞춤 표시.
+
+region-jeju.jpg — 광치기해변
+제공: 한국관광공사 TourAPI
+공공누리 제1유형 (출처표시)
+촬영자: 개별 촬영자 정보 미제공
+원본: https://tong.visitkorea.or.kr/cms/resource/00/4098400_image2_1.JPG
+출처: https://www.data.go.kr/data/15101578/openapi.do
+이용조건: https://www.kogl.or.kr/info/license.do
+확인: 2026-11-06T14:18:13.016Z
+가로세로 비율 유지 축소·JPEG 압축. 카드에서는 중앙 맞춤 표시.
+
+region-busan.jpg — 해운대 달맞이길
+제공: 한국관광공사 TourAPI
+공공누리 제1유형 (출처표시)
+촬영자: 개별 촬영자 정보 미제공
+원본: https://tong.visitkorea.or.kr/cms/resource/49/3412849_image2_1.jpg
+출처: https://www.data.go.kr/data/15101578/openapi.do
+이용조건: https://www.kogl.or.kr/info/license.do
+확인: 2026-11-06T14:18:13.213Z
+가로세로 비율 유지 축소·JPEG 압축. 카드에서는 중앙 맞춤 표시.
+
+region-gapyeong.jpg — 자라섬
+제공: 한국관광공사 TourAPI
+공공누리 제1유형 (출처표시)
+촬영자: 개별 촬영자 정보 미제공
+원본: https://tong.visitkorea.or.kr/cms/resource/68/3512868_image2_1.jpg
+출처: https://www.data.go.kr/data/15101578/openapi.do
+이용조건: https://www.kogl.or.kr/info/license.do
+확인: 2026-11-06T14:18:13.452Z
+가로세로 비율 유지 축소·JPEG 압축. 카드에서는 중앙 맞춤 표시.

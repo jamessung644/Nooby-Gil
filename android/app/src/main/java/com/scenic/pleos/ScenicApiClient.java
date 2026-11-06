@@ -53,6 +53,12 @@ public final class ScenicApiClient {
         return request("GET", "/api/status", null);
     }
 
+    /** Fresh public inventory around the selected meal/parking anchor, including a focused lot. */
+    public JSONObject nearbyParking(DestinationPlace anchor,String focusId)throws ApiException {
+        if(anchor==null||focusId==null||!focusId.matches("[0-9]{1,100}"))throw new ApiException("주차 확인 장소를 다시 선택해 주세요.");
+        return request("GET","/api/nearby?kind=parking&lat="+anchor.lat+"&lon="+anchor.lon+"&focusId="+focusId,null,30000);
+    }
+
     /** Text-only destination search; this sends neither an origin nor device GPS. */
     public JSONObject searchDestinations(String query)throws ApiException {
         if(query==null||query.trim().isEmpty()||query.trim().length()>80||MusicContext.hasControl(query))

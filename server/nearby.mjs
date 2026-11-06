@@ -1,4 +1,5 @@
 import { ApiError } from './providers.mjs';
+import { enrichParkingPlaces } from './parking-live.mjs';
 
 // Kakao Local category contract: https://developers.kakao.com/docs/ko/local/dev-guide#search-by-category
 const categories = { restaurant: 'FD6', parking: 'PK6' };
@@ -10,11 +11,12 @@ const clean = (value, max, optional = false) => typeof value === 'string'
 const coordinate = (lat, lon) => typeof lat === 'number' && typeof lon === 'number'
   && Number.isFinite(lat) && Number.isFinite(lon) && lat >= 33 && lat <= 38.65 && lon >= 124.5 && lon <= 131.95;
 
-export async function searchNearby(input, { env = process.env, fetchImpl = fetch } = {}) {
+export async function searchNearby(input, { env = process.env, fetchImpl = fetch, now = Date.now } = {}) {
   if (!input || Array.isArray(input) || typeof input !== 'object'
-    || Object.keys(input).some(key => !['kind', 'lat', 'lon', 'query'].includes(key))
+    || Object.keys(input).some(key => !['kind', 'lat', 'lon', 'query', 'focusId'].includes(key))
     || !Object.hasOwn(categories, input.kind) || !coordinate(input.lat, input.lon)
-    || (input.query !== undefined && (!clean(input.query, 40) || input.kind !== 'restaurant'))) {
+    || (input.query !== undefined && (!clean(input.query, 40) || input.kind !== 'restaurant'))
+    || (input.focusId !== undefined && (input.kind !== 'parking' || typeof input.focusId !== 'string' || !/^[0-9]{1,100}$/.test(input.focusId)))) {
     throw new ApiError('국내 기준 위치와 음식점 또는 주차장을 선택해 주세요.');
   }
   const key = typeof env.KAKAO_REST_API_KEY === 'string' ? env.KAKAO_REST_API_KEY.trim() : '';
@@ -40,7 +42,7 @@ export async function searchNearby(input, { env = process.env, fetchImpl = fetch
       new Promise((_resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(new ApiError('주변 장소 조회 시간이 초과됐어요. 다시 시도해 주세요.', 504)); }, 12000); }),
     ]);
     if (!Array.isArray(data?.documents)) throw new ApiError('주변 장소 검색 응답을 확인하지 못했어요.', 502);
-    const places = [], ids = new Set();
+    let places = []; const ids = new Set();
     for (const item of input.kind === 'parking' ? data.documents.slice(0, 15) : data.documents) {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !/^[0-9]{1,100}$/.test(item.id)
         || ids.has(item.id) || !clean(item.place_name, 120)
@@ -59,10 +61,14 @@ export async function searchNearby(input, { env = process.env, fetchImpl = fetch
         placeUrl: `https://place.map.kakao.com/${item.id}`, parkingStatus: 'unknown' });
       if (places.length === 10 && input.kind !== 'parking') break;
     }
+    if (input.kind === 'parking') places = await enrichParkingPlaces(places, { fetchImpl, now });
+    const availabilityOrder = { available: 0, unknown: 1, full: 2 };
     // Keyword relevance is Kakao's returned order, not an invented quality score.
-    if (!query) places.sort((a, b) => (input.kind === 'parking' ? Number(publicParkingLabel(b.name)) - Number(publicParkingLabel(a.name)) : 0)
+    if (!query) places.sort((a, b) => (input.kind === 'parking' ? availabilityOrder[a.parkingStatus] - availabilityOrder[b.parkingStatus]
+      || Number(publicParkingLabel(b.name)) - Number(publicParkingLabel(a.name)) : 0)
       || a.distanceMeters - b.distanceMeters || a.id.localeCompare(b.id));
-    return { source: 'Kakao Local', kind: input.kind, query, ranking: query ? 'relevance' : input.kind === 'parking' ? 'public_label_then_distance' : 'distance', places: places.slice(0, 10) };
+    return { source: 'Kakao Local', kind: input.kind, query, ranking: query ? 'relevance' : input.kind === 'parking' ? 'availability_then_public_label_then_distance' : 'distance',
+      places: places.slice(0, 10), ...(input.kind === 'parking' ? { focus: places.find(place => place.id === input.focusId) || null } : {}) };
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError('주변 장소 서비스에 연결하지 못했어요. 다시 시도해 주세요.', 502);

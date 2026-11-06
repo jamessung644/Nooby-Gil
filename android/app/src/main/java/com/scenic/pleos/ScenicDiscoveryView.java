@@ -8,6 +8,7 @@ import android.view.*;
 import android.widget.*;
 import java.io.*;
 import java.util.*;
+import org.json.*;
 
 /** Region discovery first; real destination photos follow an explicit area selection. */
 public final class ScenicDiscoveryView {
@@ -25,6 +26,7 @@ public final class ScenicDiscoveryView {
     private final Activity activity; private final Host host; private final SharedPreferences prefs;
     private String filter="전체"; private LinearLayout body; private boolean wide,samplesExpanded; private AlertDialog dialog;
     private final Map<String,Bitmap> images=new HashMap<>();
+    private final Map<String,JSONObject> regionPhotos=new HashMap<>();
     private static final class Entry {
         final String id,name,subtitle,key,theme,label; final double lat,lon;
         Entry(String id,String name,String subtitle,String key,String theme,String label,double lat,double lon){this.id=id;this.name=name;this.subtitle=subtitle;this.key=key;this.theme=theme;this.label=label;this.lat=lat;this.lon=lon;}
@@ -34,7 +36,8 @@ public final class ScenicDiscoveryView {
         new Entry("126078","광안리해수욕장","도시와 바다가 만나는 해안 드라이브","gwangalli","coast","도시",35.1531932737,129.1189760936),
         new Entry("cheongsapo","청사포","작은 항구에서 마무리하는 바닷길","coast","coast","바다",35.16051,129.19129)
     };
-    public ScenicDiscoveryView(Activity activity,Host host){this.activity=activity;this.host=host;this.prefs=activity.getSharedPreferences("scenic_discovery",0);}
+    public ScenicDiscoveryView(Activity activity,Host host){this.activity=activity;this.host=host;this.prefs=activity.getSharedPreferences("scenic_discovery",0);loadRegionPhotos();}
+    private void loadRegionPhotos(){try(InputStream input=activity.getAssets().open("scenic-regions/manifest.json")){ByteArrayOutputStream bytes=new ByteArrayOutputStream();byte[] buffer=new byte[4096];int count;while((count=input.read(buffer))!=-1){if(bytes.size()+count>65536)return;bytes.write(buffer,0,count);}JSONArray photos=new JSONObject(bytes.toString("UTF-8")).getJSONArray("photos");for(int i=0;i<photos.length();i++){JSONObject photo=photos.getJSONObject(i);String id=photo.getString("regionId");if(DriveRegion.byId(id)!=null&&photo.getString("file").equals(id+".jpg")&&ScenicPhotoCollection.safeImageUrl(photo.getString("originalUrl")))regionPhotos.put(id,photo);}}catch(Exception ignored){regionPhotos.clear();}}
     public View createView(boolean wide){this.wide=wide;body=col();body.setPadding(0,0,0,dp(24));render();ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);scroll.addView(body);return scroll;}
     private void render(){
         if(body==null)return;body.removeAllViews();
@@ -56,7 +59,7 @@ public final class ScenicDiscoveryView {
         addStep(steps,"03","맛집·주차","도착지 근처에서 한 끼까지");body.addView(steps,size(-1,-2));gap(body,23);
 
         body.addView(text("오늘의 드라이브 지역",23,INK,true));gap(body,7);
-        body.addView(text("지역을 고르면 주변 공개 사진을 불러와요. 아래 카드는 여행 테마를 담은 일러스트입니다.",13,MUTED,false));gap(body,14);
+        body.addView(text("실제 풍경으로 먼저 만나보세요. 지역을 고르면 주변 사진을 AI가 살펴보고 갈 곳을 제안해요.",13,MUTED,false));gap(body,14);
         LinearLayout filters=row();for(String label:new String[]{"전체","바다","산·강","도시"}){filters.addView(button(label,filter.equals(label),()->{filter=label;render();}));space(filters,8);}
         HorizontalScrollView filterScroll=new HorizontalScrollView(activity);filterScroll.setHorizontalScrollBarEnabled(false);filterScroll.addView(filters);body.addView(filterScroll);gap(body,16);
         List<DriveRegion> shown=new ArrayList<>();for(DriveRegion region:DriveRegion.ALL)if(region.matchesFilter(filter))shown.add(region);
@@ -91,19 +94,28 @@ public final class ScenicDiscoveryView {
     }
     private View regionCard(DriveRegion region){
         LinearLayout card=col();card.setPadding(dp(15),dp(15),dp(15),dp(17));card.setBackground(bg(0xffffffff,LINE));
-        FrameLayout artwork=new FrameLayout(activity);artwork.setBackground(bg(0xffe7eeeb,0));artwork.setClipToOutline(true);artwork.addView(new RegionIllustration(region),new FrameLayout.LayoutParams(-1,-1));
-        TextView theme=text(region.driveTheme,15,INK,true);theme.setPadding(dp(15),dp(12),dp(15),dp(12));artwork.addView(theme,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));card.addView(artwork,size(-1,110));gap(card,14);
+        FrameLayout artwork=new FrameLayout(activity);artwork.setBackground(bg(0xffe7eeeb,0));artwork.setClipToOutline(true);
+        JSONObject photoInfo=regionPhotos.get(region.id);boolean loaded=false;
+        if(photoInfo!=null)try{String key="region:"+region.id;Bitmap bitmap=images.get(key);if(bitmap==null){try(InputStream input=activity.getAssets().open("scenic-regions/"+region.id+".jpg")){bitmap=BitmapFactory.decodeStream(input);}if(bitmap!=null)images.put(key,bitmap);}if(bitmap!=null){ImageView image=new ImageView(activity);image.setScaleType(ImageView.ScaleType.CENTER_CROP);image.setImageBitmap(bitmap);image.setContentDescription(region.name+" · "+photoInfo.optString("placeName")+" 실제 공개 사진");artwork.addView(image,new FrameLayout.LayoutParams(-1,-1));loaded=true;}}catch(Exception ignored){}
+        if(!loaded)artwork.addView(new RegionIllustration(region),new FrameLayout.LayoutParams(-1,-1));
+        View shade=new View(activity);shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x00000000,0xbb10251f}));artwork.addView(shade,new FrameLayout.LayoutParams(-1,dp(80),Gravity.BOTTOM));
+        TextView theme=text(region.driveTheme,15,0xffffffff,true);theme.setPadding(dp(15),dp(12),dp(15),dp(12));artwork.addView(theme,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));card.addView(artwork,size(-1,wide?166:206));gap(card,9);
+        card.addView(text(loaded?photoInfo.optString("placeName")+" · 한국관광공사": "여행 테마 일러스트 · 사진을 읽지 못했어요",11,MUTED,false));gap(card,10);
         card.addView(text(region.name,26,INK,true));gap(card,8);TextView landscape=text(region.scenery,14,MUTED,false);landscape.setMinHeight(dp(39));card.addView(landscape);gap(card,9);
         card.addView(text("함께 맛볼 것  ·  "+region.foodLabel(),13,TEAL,true));gap(card,8);
         card.addView(text("탐색 기준  ·  "+region.centerLabel,12,MUTED,false));gap(card,14);
         card.addView(button("이 지역 풍경 보기  →",true,()->choose(region)),size(-1,-2));gap(card,8);
-        TextView source=button("지역·먹거리 정보",false,()->regionInfo(region));source.setTextSize(12);source.setPadding(dp(10),dp(10),dp(10),dp(10));card.addView(source,size(-1,-2));return card;
+        TextView source=button("지역·사진 출처",false,()->regionInfo(region));source.setTextSize(12);source.setPadding(dp(10),dp(10),dp(10),dp(10));card.addView(source,size(-1,-2));return card;
     }
     private void choose(DriveRegion region){if(!allowed())return;pause();try{host.chooseRegion(region.toDestination());}catch(Exception invalid){Toast.makeText(activity,"지역 정보를 확인하지 못했어요. 다른 지역을 선택해 주세요.",Toast.LENGTH_SHORT).show();}}
     private void regionInfo(DriveRegion region){
-        if(!allowed())return;pause();dialog=new AlertDialog.Builder(activity).setTitle(region.name+" · 여행 힌트")
-                .setMessage(region.scenery+"\n"+region.driveTheme+"\n\n함께 맛볼 음식: "+region.foodLabel()+"\n\n공식 관광 자료를 참고한 지역 소개입니다. 식당의 영업 여부·메뉴·주차 가능 여부는 방문할 장소를 선택한 뒤 확인해 주세요.\n\n탐색 기준점은 지역 사진 검색용이며 사진 촬영 지점이나 최종 목적지가 아닙니다.\n\n"+region.officialSource)
-                .setPositiveButton("관광 정보 열기",(d,w)->openOfficial(region.officialSourceUrl)).setNeutralButton("음식 정보 열기",(d,w)->openOfficial(region.foodSourceUrl)).setNegativeButton("닫기",null).show();
+        if(!allowed())return;pause();JSONObject photo=regionPhotos.get(region.id);
+        String credit=photo==null?"사진을 읽지 못해 여행 테마 일러스트를 표시합니다.":photo.optString("placeName")+"\n한국관광공사 TourAPI 제공 · "+photo.optString("license")+"\n"+photo.optString("photographer")+"\n확인일: "+photo.optString("fetchedAt").substring(0,10)+"\n가로세로 비율 유지 축소·JPEG 압축, 카드 중앙 맞춤 표시\n정확한 촬영 지점·방향·시기는 미확인";
+        AlertDialog.Builder builder=new AlertDialog.Builder(activity).setTitle(region.name+" · 여행과 사진")
+                .setMessage(region.scenery+"\n"+region.driveTheme+"\n\n함께 맛볼 음식: "+region.foodLabel()+"\n\n사진: "+credit+"\n\n탐색 기준점은 지역 사진 검색용이며 사진 촬영 지점이나 최종 목적지가 아닙니다.\n\n지역·음식 자료: "+region.officialSource+"\n"+region.foodSourceUrl)
+                .setPositiveButton("관광 정보 열기",(d,w)->openOfficial(region.officialSourceUrl)).setNegativeButton("닫기",null);
+        if(photo!=null)builder.setNeutralButton("사진 원본·출처",(d,w)->openOfficial(photo.optString("originalUrl")));
+        dialog=builder.show();
     }
     private void openOfficial(String url){if(!allowed())return;try{activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,android.net.Uri.parse(url)));}catch(Exception unavailable){Toast.makeText(activity,"링크를 열 수 있는 앱이 없어요.",Toast.LENGTH_SHORT).show();}}
     private final class RegionIllustration extends View {

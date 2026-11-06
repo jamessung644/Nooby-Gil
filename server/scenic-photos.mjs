@@ -71,7 +71,7 @@ export function safeTourPhotoUrl(value) {
     const url = new URL(value);
     if (!['http:', 'https:'].includes(url.protocol) || url.hostname !== 'tong.visitkorea.or.kr'
       || url.username || url.password || url.port || url.search || url.hash
-      || !/^\/cms\/resource\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/i.test(url.pathname)) return null;
+      || !/^\/cms\/(?:resource|resource_photo)\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.(?:jpe?g|png|webp)$/i.test(url.pathname)) return null;
     url.protocol = 'https:';
     return url.href;
   } catch { return null; }
@@ -120,7 +120,7 @@ function landscapeHint(name) {
   if (/해안|바다|전망공원|전망쉼터|호수|저수지|강변|수변|습지|숲|수목원|정원|휴양림|스카이라인|가로수길|벚꽃길|메타세쿼이아|야경|노을|해맞이|호(?:$|\()/.test(name)) return 2;
   return /공원|가든/.test(name) ? 1 : 0;
 }
-function photosFromTour(data, destination, radiusMeters) {
+function photosFromTour(data, destination, radiusMeters, curatedIds = new Set()) {
   if (data?.response?.header?.resultCode !== '0000' || !object(data.response.body)) throw new ApiError('관광 사진 응답을 확인하지 못했습니다.', 502);
   const raw = data.response.body.items?.item;
   if (raw != null && raw !== '' && !Array.isArray(raw) && !object(raw)) throw new ApiError('관광 사진 응답을 확인하지 못했습니다.', 502);
@@ -142,7 +142,7 @@ function photosFromTour(data, destination, radiusMeters) {
   }
   // Prefer scenery candidates before the bounded vision request. If vision is
   // unavailable the selected public candidates are displayed in distance order.
-  return photos.sort((a, b) => landscapeHint(b.place.name) - landscapeHint(a.place.name)
+  return photos.sort((a, b) => Number(curatedIds.has(b.place.id.slice(5))) - Number(curatedIds.has(a.place.id.slice(5))) || landscapeHint(b.place.name) - landscapeHint(a.place.name)
     || a.distanceMeters - b.distanceMeters || a.id.localeCompare(b.id)).slice(0, MAX_PHOTOS)
     .sort((a, b) => a.distanceMeters - b.distanceMeters || a.id.localeCompare(b.id));
 }
@@ -156,7 +156,7 @@ function nearbyCatalogIds(catalog, destination, radiusMeters, seen) {
       || unsuitableDrivePlace({ title: place.title, lclsSystm3: place.classification3 })) continue;
     ids.add(String(place.id)); candidates.push(place);
   }
-  return candidates.sort((a, b) => landscapeHint(b.title) - landscapeHint(a.title)
+  return candidates.sort((a, b) => Number(b.curated === true) - Number(a.curated === true) || landscapeHint(b.title) - landscapeHint(a.title)
     || distance(destination, a) - distance(destination, b) || String(a.id).localeCompare(String(b.id))).slice(0, 8).map(place => String(place.id));
 }
 
@@ -169,7 +169,12 @@ function getPhotoCatalog() {
     // published from this snapshot without a fresh, matching detail response.
     const snapshot = JSON.parse(readFileSync(new URL('../catalog/tourapi-snapshot.json', import.meta.url), 'utf8'));
     if (!Array.isArray(snapshot.places) || snapshot.places.length > 100000) throw new Error('catalog');
-    photoCatalog = { places: [...snapshot.places, ...prepared.places] };
+    let curated = [];
+    try {
+      const selected = JSON.parse(readFileSync(new URL('../catalog/scenic-photo-curation.json', import.meta.url), 'utf8'));
+      if (Array.isArray(selected.places) && selected.places.length <= 100) curated = selected.places;
+    } catch { /* Runtime photo lookup remains available without the editorial catalog. */ }
+    photoCatalog = { places: [...curated, ...snapshot.places, ...prepared.places] };
   } catch { photoCatalog = prepared; }
   return photoCatalog;
 }
@@ -200,6 +205,37 @@ async function supplementCatalogPhotos(raw, destination, radiusMeters, { env, fe
     }
   }));
   return { extra, failed };
+}
+
+// Editorial choices are image IDs, not permission to reuse yesterday's metadata.
+// Recheck the specific gallery image's current Type1 license and owning POI.
+async function refreshCuratedImages(photos, { env, fetchImpl, catalog, deadline }) {
+  const choices = new Map((catalog?.places || []).filter(place => place?.curated === true && object(place.preferredImage))
+    .map(place => [String(place.id), place.preferredImage]));
+  const selected = photos.filter(photo => choices.has(photo.place.id.slice(5))).slice(0, 4);
+  const replacements = new Map(); let cursor = 0, failed = false;
+  await Promise.all(Array.from({ length: Math.min(2, selected.length) }, async () => {
+    while (cursor < selected.length) {
+      const photo = selected[cursor++], id = photo.place.id.slice(5), preferred = choices.get(id);
+      if (!clean(preferred.serial, 100)) { failed = true; continue; }
+      const url = buildTourUrl({ lat: photo.place.lat, lon: photo.place.lon }, env.TOUR_API_KEY);
+      url.pathname = url.pathname.replace('locationBasedList2', 'detailImage2');
+      for (const key of ['mapX', 'mapY', 'radius', 'contentTypeId', 'arrange']) url.searchParams.delete(key);
+      url.searchParams.set('contentId', id); url.searchParams.set('imageYN', 'Y'); url.searchParams.set('numOfRows', '30');
+      try {
+        const remaining = Math.min(4000, deadline - Date.now()); if (remaining <= 0) throw new Error('deadline');
+        const data = await requestJson(url, {}, fetchImpl, remaining, '선별 풍경 사진');
+        if (data?.response?.header?.resultCode !== '0000' || !object(data.response.body)) throw new Error('envelope');
+        const raw = data.response.body.items?.item, rows = Array.isArray(raw) ? raw : object(raw) ? [raw] : [];
+        const matching = rows.filter(row => object(row) && String(row.contentid) === id && row.serialnum === preferred.serial);
+        if (matching.length !== 1 || matching[0].cpyrhtDivCd !== 'Type1') throw new Error('license');
+        const imageUrl = safeTourPhotoUrl(matching[0].originimgurl), thumbnailUrl = safeTourPhotoUrl(matching[0].smallimageurl) || imageUrl;
+        if (!imageUrl || !thumbnailUrl) throw new Error('image');
+        replacements.set(photo.id, { ...photo, imageUrl, thumbnailUrl });
+      } catch { failed = true; }
+    }
+  }));
+  return { photos: photos.map(photo => replacements.get(photo.id) || photo), failed };
 }
 
 function visionRequest(photos, model) {
@@ -251,29 +287,36 @@ export async function findScenicPhotos(input, { env = process.env, fetchImpl = f
   const { destination, radiusMeters = 10000 } = input;
   if (!Number.isInteger(radiusMeters) || radiusMeters < 1000 || radiusMeters > 20000) throw new ApiError('사진 검색 반경은 1,000~20,000m입니다.');
   const deadline = Date.now() + 70000;
-  let photos = [], supplementalFailed = false, ranking = { mode: 'distance', provider: null, message: '이미지 평가 없이 목적지와 가까운 순서입니다.' };
+  let photos = [], supplementalFailed = false, galleryFailed = false, ranking = { mode: 'distance', provider: null, message: '이미지 평가 없이 목적지와 가까운 순서입니다.' };
   const message = '사진은 해당 관광 장소의 대표 이미지입니다. 좌표는 장소 위치이며 촬영 지점이 아닙니다. 실제 도로의 차창 조망·촬영 방향·시기는 확인하지 않았습니다.';
-  const response = () => ({ destination, radiusMeters, source: SOURCE, ranking: { ...ranking, message: ranking.message + (supplementalFailed ? ' 일부 장소의 최신 사진은 확인하지 못했습니다.' : '') },
+  const response = () => ({ destination, radiusMeters, source: SOURCE, ranking: { ...ranking, message: ranking.message + (supplementalFailed ? ' 일부 장소의 최신 사진은 확인하지 못했습니다.' : '') + (galleryFailed ? ' 일부 선별 사진은 갱신하지 못해 확인된 장소 대표 사진을 사용합니다.' : '') },
     photos: photos.map(photo => ({ ...photo, selectionToken: selectionSigner.issue(destination, photo.place, photo.scene) })), message });
   if (!env.TOUR_API_KEY) { ranking.message = '관광 사진 조회 키가 없어 사진을 불러오지 못했습니다.'; return response(); }
+  const activeCatalog = catalog === undefined ? getPhotoCatalog() : catalog;
+  const curatedIds = new Set((activeCatalog?.places || []).filter(place => place?.curated === true).map(place => String(place.id)));
   try {
     const url = buildTourUrl({ lat: destination.lat, lon: destination.lon, radiusMeters }, env.TOUR_API_KEY);
     url.searchParams.set('numOfRows', '100');
     const data = await requestJson(url, {}, fetchImpl, 15000, '관광 사진');
-    photos = photosFromTour(data, destination, radiusMeters);
+    photos = photosFromTour(data, destination, radiusMeters, curatedIds);
     // Some current location indexes omit longstanding scenic places even though
     // detailCommon2 still returns their current, licensed images. Fill a sparse
     // result with a bounded set of known nearby IDs, never with saved photo data.
-    if (photos.length < 6) {
-      const original = data.response.body.items?.item;
-      const raw = Array.isArray(original) ? original : object(original) ? [original] : [];
+    const original = data.response.body.items?.item;
+    const raw = Array.isArray(original) ? original : object(original) ? [original] : [];
+    const seen = new Set(raw.filter(object).map(item => String(item.contentid)));
+    if (photos.length < 6 || nearbyCatalogIds(activeCatalog, destination, radiusMeters, seen).some(id => curatedIds.has(id))) {
       try {
         const supplement = await supplementCatalogPhotos(raw, destination, radiusMeters, {
-          env, fetchImpl, catalog: catalog === undefined ? getPhotoCatalog() : catalog, deadline: Math.min(deadline, Date.now() + 19000),
+          env, fetchImpl, catalog: activeCatalog, deadline: Math.min(deadline, Date.now() + 19000),
         });
         supplementalFailed = supplement.failed;
-        photos = photosFromTour({ response: { header: { resultCode: '0000' }, body: { items: { item: [...raw, ...supplement.extra] } } } }, destination, radiusMeters);
+        photos = photosFromTour({ response: { header: { resultCode: '0000' }, body: { items: { item: [...raw, ...supplement.extra] } } } }, destination, radiusMeters, curatedIds);
       } catch { supplementalFailed = true; }
+    }
+    if (photos.length) {
+      const gallery = await refreshCuratedImages(photos, { env, fetchImpl, catalog: activeCatalog, deadline: Math.min(deadline, Date.now() + 9000) });
+      photos = gallery.photos; galleryFailed = gallery.failed;
     }
   } catch { ranking.message = '관광 사진을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.'; return response(); }
   if (!photos.length) { ranking.message = '반경 안에서 좌표와 이용 조건이 확인된 공개 사진을 찾지 못했습니다.'; return response(); }
