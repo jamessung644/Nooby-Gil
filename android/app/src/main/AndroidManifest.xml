@@ -7,6 +7,7 @@
     <uses-feature android:name="android.hardware.location" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <queries>
+        <intent><action android:name="android.speech.action.RECOGNIZE_SPEECH" /></intent>
         <!-- Needed only for the installed app's launcher fallback on Android 11+. -->
         <package android:name="com.google.android.apps.youtube.music" />
     </queries>

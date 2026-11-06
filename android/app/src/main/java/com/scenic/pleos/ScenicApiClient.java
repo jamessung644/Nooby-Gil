@@ -83,6 +83,7 @@ public final class ScenicApiClient {
         if(context==null)throw new ApiException("음악을 추천할 드라이브 조건을 다시 확인해 주세요.");
         try{
             JSONObject coarseContext=new JSONObject().put("title",context.title).put("theme",context.theme).put("durationMinutes",context.durationMinutes);
+            if(!"balanced".equals(context.preference))coarseContext.put("preference",context.preference);
             return request("POST","/api/android/music",new JSONObject().put("context",coarseContext),30000);
         }catch(JSONException e){throw new ApiException("음악 추천 요청을 만들지 못했습니다. 다시 시도해 주세요.");}
     }

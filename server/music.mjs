@@ -9,13 +9,17 @@ const text = (value, max) => typeof value === 'string' && value.trim().length > 
 const invalid = () => new ApiError('AI가 고른 플레이리스트를 확인하지 못했습니다. 다시 추천받아 주세요.', 502);
 
 function contextFrom(input) {
-  if (!keys(input, ['context']) || !keys(input.context, ['title', 'theme', 'durationMinutes'])) {
+  if (!keys(input, ['context']) || !keys(input.context, ['title', 'theme', 'durationMinutes', 'preference'])) {
     throw new ApiError('음악 추천에는 코스 이름·풍경·시간만 입력해 주세요.');
   }
   const { title, theme, durationMinutes } = input.context;
   if (!text(title, 120) || !themes.has(theme) || !Number.isInteger(durationMinutes)
     || durationMinutes < 1 || durationMinutes > 720) throw new ApiError('음악을 추천할 코스와 시간을 확인해 주세요.');
-  return { title: title.trim(), theme, durationMinutes };
+  const preference = input.context.preference;
+  if (preference !== undefined && !['balanced','acoustic','chill','energetic','instrumental'].includes(preference)) {
+    throw new ApiError('음악 취향을 다시 선택해 주세요.');
+  }
+  return { title: title.trim(), theme, durationMinutes, ...(preference === undefined ? {} : { preference }) };
 }
 
 function requestBody(context, model) {
@@ -28,6 +32,7 @@ function requestBody(context, model) {
       'theme은 coast=바다, forest=숲길, mountain=산길, water=호수·강변, countryside=시골길, city=도심, all=전체이며 lake는 기존 호수 코스입니다.',
       '숲길·산길·호수·강변에는 여유롭고 차분한 음악, 시골길에는 담백한 어쿠스틱 음악, 바다에는 밝고 경쾌한 음악, 도심에는 도시적인 음악을 우선 고려하되 후보 설명에 근거해 판단하세요.',
       'reason은 왜 이 코스 분위기에 맞는지 한국어 160자 이내로 설명하세요. 개인 취향·날씨·현재 시각을 안다고 가정하지 마세요.',
+      'preference가 있으면 사용자가 직접 선택한 음악 취향입니다. balanced=경로 분위기 우선, acoustic=어쿠스틱, chill=차분함, energetic=경쾌함, instrumental=가사 없는 음악 선호를 후보 설명과 함께 고려하세요. 후보가 취향을 충족한다고 보장하지 말고 실제 후보 설명에 근거하세요.',
       '전체 음악 길이·곡 수·로그인 없이 재생·자동 재생·운전 안전성을 보장하지 마세요. 선택한 목록은 사용자가 버튼을 눌렀을 때 열립니다.',
       '응답 필드는 playlistId와 reason뿐입니다.',
     ].join('\n'),

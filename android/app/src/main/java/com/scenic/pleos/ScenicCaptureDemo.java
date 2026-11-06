@@ -44,7 +44,7 @@ public final class ScenicCaptureDemo {
     private AlertDialog dialog;
     private LinearLayout panel;
     private String panelRouteId,panelRouteName,panelDestination,panelSegment;
-    private boolean panelWide;
+    private boolean panelWide,panelAllRecords;
 
     public ScenicCaptureDemo(Activity activity,Host host) {
         this.activity=activity;this.host=host;
@@ -56,7 +56,10 @@ public final class ScenicCaptureDemo {
     }
     /** A ScrollView on wide displays; a natural-height column inside the host's portrait scroll. */
     public View createView(String routeId,String routeName,String destination,String segmentName,boolean wide) {
-        panelRouteId=routeId;panelRouteName=routeName;panelDestination=destination;panelSegment=segmentName;panelWide=wide;
+        return createView(routeId,routeName,destination,segmentName,wide,false);
+    }
+    public View createView(String routeId,String routeName,String destination,String segmentName,boolean wide,boolean showAllRecords) {
+        panelRouteId=routeId;panelRouteName=routeName;panelDestination=destination;panelSegment=segmentName;panelWide=wide;panelAllRecords=showAllRecords;
         panel=column();panel.setPadding(dp(24),dp(24),dp(24),dp(28));panel.setBackground(background(WHITE,LINE));
         renderPanel();
         if(!wide)return panel;
@@ -77,6 +80,7 @@ public final class ScenicCaptureDemo {
         preview.setOnClickListener(v->{if(allowed())showPhoto(previewKey,route,previewDetail);});
         return preview;
     }
+    public void setSharingEnabled(boolean enabled){store.setSharingEnabled(enabled);}
     public int savedCount(String routeId){return store.recordsForRoute(routeId).size();}
     public List<ScenicCaptureStore.Record> recordsForRoute(String routeId){return store.recordsForRoute(routeId);}
 
@@ -133,9 +137,9 @@ public final class ScenicCaptureDemo {
             panel.addView(text("목적지와 경로를 선택하면 촬영 데모를 시작할 수 있어요.",15,MUTED,false));gap(panel,20);
         }
         View divider=new View(activity);divider.setBackgroundColor(LINE);panel.addView(divider,size(-1,1));gap(panel,20);
-        List<ScenicCaptureStore.Record> records=store.recordsForRoute(panelRouteId);
+        List<ScenicCaptureStore.Record> records=store.recordsForRoute(panelAllRecords?null:panelRouteId);
         panel.addView(text("데모 갤러리  "+records.size(),21,INK,true));gap(panel,7);
-        panel.addView(text(selected?"선택한 경로에 저장한 장면이에요.":"이 기기에 저장한 풍경 기록이에요.",14,MUTED,false));gap(panel,16);
+        panel.addView(text(selected&&!panelAllRecords?"선택한 경로에 저장한 장면이에요.":"이 기기에 저장한 풍경 기록이에요.",14,MUTED,false));gap(panel,16);
         if(records.isEmpty()) {
             LinearLayout empty=column();empty.setPadding(dp(20),dp(24),dp(20),dp(24));empty.setBackground(background(SOFT,0));
             empty.addView(text("첫 번째 풍경을 담아 보세요",18,INK,true));gap(empty,8);
