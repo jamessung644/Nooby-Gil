@@ -127,26 +127,36 @@ public final class ScenicApiClient {
     /** Called only after the user explicitly requests an itinerary from a recent device fix. */
     public JSONObject plan(CourseEngine.Position origin,int budget,String preference,int radiusMeters) throws ApiException {
         if(origin==null||!origin.fresh())throw new ApiException("최근 위치를 받은 뒤 다시 코스를 만들어 주세요.");
-        return planAt(origin.lat,origin.lon,budget,preference,radiusMeters);
+        return planAt(origin.lat,origin.lon,budget,preference,radiusMeters,false,15,false);
+    }
+    public JSONObject plan(CourseEngine.Position origin,int budget,String preference,int radiusMeters,boolean returnToOrigin,int stayMinutes) throws ApiException {
+        if(origin==null||!origin.fresh())throw new ApiException("최근 위치를 받은 뒤 다시 코스를 만들어 주세요.");
+        return planAt(origin.lat,origin.lon,budget,preference,radiusMeters,returnToOrigin,stayMinutes,true);
     }
 
     /** A clearly labeled public demonstration origin; this never changes the Android GPS. */
     public JSONObject planAtSeoulCityHall(int budget,String preference) throws ApiException {
-        return planAt(37.5665,126.9780,budget,preference,20000);
+        return planAt(37.5665,126.9780,budget,preference,20000,false,15,false);
+    }
+    public JSONObject planAtSeoulCityHall(int budget,String preference,boolean returnToOrigin,int stayMinutes) throws ApiException {
+        return planAt(37.5665,126.9780,budget,preference,20000,returnToOrigin,stayMinutes,true);
     }
 
-    private JSONObject planAt(double lat,double lon,int budget,String preference,int radiusMeters) throws ApiException {
+    private JSONObject planAt(double lat,double lon,int budget,String preference,int radiusMeters,boolean returnToOrigin,int stayMinutes,boolean includeOptions) throws ApiException {
         if(!CourseEngine.inKorea(lat,lon)||CourseEngine.unsupportedIslandOrigin(lat,lon))throw new ApiException("이 출발 위치에서는 코스를 만들 수 없어요. 국내 지역의 준비된 코스를 둘러보세요.");
         if(budget<1||budget>720)throw new ApiException("추천 시간은 1~720분으로 선택해 주세요.");
         if(radiusMeters!=20000)throw new ApiException("주변 탐색 범위를 다시 확인해 주세요.");
+        if(stayMinutes!=0&&stayMinutes!=15&&stayMinutes!=30)throw new ApiException("장소별 체류시간은 0·15·30분으로 선택해 주세요.");
         String theme;
         if("sea".equals(preference))theme="coast";
         else if("night".equals(preference))theme="city";
         else if("all".equals(preference)||"lake".equals(preference)||"forest".equals(preference)||"coast".equals(preference)||"city".equals(preference))theme=preference;
         else throw new ApiException("추천할 풍경 취향을 선택해 주세요.");
         try{
+            JSONObject preferences=new JSONObject().put("maxMinutes",budget).put("theme",theme);
+            if(includeOptions)preferences.put("returnToOrigin",returnToOrigin).put("stayMinutes",stayMinutes);
             JSONObject body=new JSONObject().put("origin",new JSONObject().put("lat",lat).put("lon",lon))
-                .put("preferences",new JSONObject().put("maxMinutes",budget).put("theme",theme)).put("radiusMeters",radiusMeters);
+                .put("preferences",preferences).put("radiusMeters",radiusMeters);
             return request("POST","/api/android/plan",body,90000);
         }catch(JSONException e){throw new ApiException("코스 생성 요청을 만들지 못했습니다. 조건을 다시 선택해 주세요.");}
     }

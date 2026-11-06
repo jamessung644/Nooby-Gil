@@ -35,6 +35,14 @@ public final class ScenicCaptureStoreTest {
         check(new ScenicCaptureStore(memory).recordsForRoute(null).size()==2,"A malformed row does not discard other captures");
         try{store.draft("","route","destination","segment",1);throw new AssertionError("Missing route context accepted");}
         catch(IllegalArgumentException expected){}
+        Memory longTerm=new Memory();ScenicCaptureStore archive=new ScenicCaptureStore(longTerm);
+        for(int i=0;i<100;i++)archive.save(archive.draft("trip-"+i,"여정 "+i,"목적지","장면",1740000000000L+i*86400000L),true);
+        ScenicCaptureStore reloaded=new ScenicCaptureStore(longTerm);
+        check(reloaded.recordsForRoute(null).size()==100,"More than 60 records survive restart without silent deletion");
+        check(reloaded.recordsForRoute("trip-0").size()==1,"Old months retain their original record");
+        String oldest=reloaded.recordsForRoute("trip-0").get(0).id;
+        check(reloaded.remove(oldest),"Only explicit removal deletes a record");
+        check(new ScenicCaptureStore(longTerm).recordsForRoute(null).size()==99,"Explicit removal persists");
         System.out.println("ScenicCaptureStoreTest passed");
     }
 }

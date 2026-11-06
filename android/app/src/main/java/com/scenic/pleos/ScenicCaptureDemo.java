@@ -101,7 +101,7 @@ public final class ScenicCaptureDemo {
         gap(body,16);
         TextView save=button("경로 미리보기에 추가",true,()->{
             if(!allowed())return;
-            ScenicCaptureStore.Record record=store.save(draft,host.canInteract());
+            ScenicCaptureStore.Record record;try{record=store.save(draft,host.canInteract());}catch(IllegalStateException full){toast(full.getMessage());return;}
             dismiss();renderPanel();host.onCaptureSaved(record);toast("데모 갤러리에 추가했어요.");
         });body.addView(save,size(-1,-2));gap(body,8);
         body.addView(button("닫기",false,this::dismiss),size(-1,-2));
@@ -154,6 +154,7 @@ public final class ScenicCaptureDemo {
             card.setContentDescription(record.segmentName+". "+record.destination+"까지의 경로에 저장한 데모 사진. 상세 열기");
             card.setFocusable(true);card.setOnClickListener(v->{if(allowed())showPhoto(record.imageKey,record.segmentName,record.destination+"까지 · "+(record.sharedPreview?"공유 미리보기":"내 장면")+"\n이 기기에만 저장된 데모 기록입니다.");});
             panel.addView(card,size(-1,-2));
+            panel.addView(button("이 샘플 기록 삭제",false,()->{if(!allowed())return;dialog=new AlertDialog.Builder(activity).setTitle("이 샘플 기록을 삭제할까요?").setMessage("이 기기의 샘플 기록만 삭제합니다. 이미 저장한 리캡 영상은 유지됩니다.").setPositiveButton("삭제",(d,w)->{if(allowed()){store.remove(record.id);renderPanel();}}).setNegativeButton("취소",null).show();}),size(-1,-2));gap(panel,14);
         }
         gap(panel,8);panel.addView(text("공유 미리보기는 이 기기에서만 보여요. 다른 운전자에게 전송되지 않아요.",13,MUTED,false));
     }

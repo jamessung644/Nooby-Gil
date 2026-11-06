@@ -13,6 +13,7 @@ const ai = (itinerary = { placeIds: ['101', '102', '103'], title: '도심 공원
   id: 'resp_live', status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(itinerary) }] }],
 });
 const kakao = (seconds = 1200, code = 0) => Response.json({ routes: [{ result_code: code, summary: { distance: 10500, duration: seconds }, sections: [{ roads: [{ vertexes: [126.978, 37.5665, 126.98, 37.57, 126.99, 37.57] }] }] }] });
+const loopRoad = (seconds = 1500) => Response.json({ routes: [{ result_code: 0, summary: { distance: 12000, duration: seconds }, sections: [{ roads: [{ vertexes: [126.978, 37.5665, 126.98, 37.57, 126.99, 37.57, 126.978, 37.5665] }] }] }] });
 let requestId = 0;
 function request(payload = input, options = {}) {
   const server = createServer({ env, ...options });
@@ -62,6 +63,8 @@ test('live plan includes the origin approach and verified road duration plus eac
   assert.equal(course.routing.distanceKm, 10.5);
   assert.equal(course.visitDurationMin, 45);
   assert.equal(course.totalDurationMin, 65);
+  assert.equal(course.returnToOrigin, false);
+  assert.equal(course.stayMinutes, 15);
   assert.ok(!Object.hasOwn(result.body, 'origin'));
   assert.ok(!Object.hasOwn(course, 'origin'));
   assert.equal(mock.calls.tour.length, 1);
@@ -99,23 +102,23 @@ test('overbudget pruning queries a new route and uses only that route duration',
   assert.equal(mock.calls.road.length, 2);
   assert.notEqual(mock.calls.road[0].url.searchParams.get('destination'), mock.calls.road[1].url.searchParams.get('destination'));
   const course = result.body.courses[0];
-  assert.deepEqual(course.spots.map((spot) => spot.id), ['101', '102', '103']);
+  assert.deepEqual(course.spots.map((spot) => spot.id), ['101', '102']);
   assert.equal(course.routing.durationMin, 30);
-  assert.equal(course.visitDurationMin, 45);
-  assert.equal(course.totalDurationMin, 75);
+  assert.equal(course.visitDurationMin, 30);
+  assert.equal(course.totalDurationMin, 60);
   assert.ok(!course.title.includes('네 공원'));
   assert.ok(!course.reason.includes('네 장소'));
 });
 
-test('infeasible routes are pruned at most three times and never returned as verified', async () => {
+test('infeasible routes are pruned within the native waypoint limit and never returned as verified', async () => {
   for (const roadResponses of [[() => kakao(5000)], [() => kakao(0, 103)]]) {
     const mock = upstream({ itinerary: { placeIds: ['101', '102', '103', '104'], title: '코스', reason: '풍경' }, roadResponses });
     const result = await request(input, mock);
     assert.equal(result.status, 200);
     assert.equal(result.body.status, 'no_feasible_route');
     assert.deepEqual(result.body.courses, []);
-    assert.equal(mock.calls.road.length, 3);
-    assert.equal(mock.calls.road[2].url.searchParams.get('waypoints').split('|').length, 1);
+    assert.equal(mock.calls.road.length, 2);
+    assert.equal(mock.calls.road[1].url.searchParams.get('waypoints').split('|').length, 1);
   }
 });
 
@@ -294,4 +297,98 @@ test('returned scenery describes selected places even when the preferred scenery
   const result = await request({ ...input, preferences: { maxMinutes: 100, theme: 'forest' } }, mock);
   assert.equal(result.body.status, 'ok');
   assert.equal(result.body.courses[0].theme, 'coast');
+});
+
+test('round-trip request includes every selected stop as a waypoint and the real return leg in total time', async () => {
+  const mock = upstream({ roadResponses: [() => loopRoad()] });
+  const result = await request({ ...input, preferences: { ...input.preferences, returnToOrigin: true, stayMinutes: 15 } }, mock);
+  assert.equal(result.body.status, 'ok');
+  const course = result.body.courses[0];
+  const route = mock.calls.road[0].url;
+  assert.equal(route.searchParams.get('destination'), route.searchParams.get('origin'));
+  assert.equal(route.searchParams.get('waypoints'), places.slice(0, 2).map(place => `${place.mapx},${place.mapy}`).join('|'));
+  assert.equal(course.returnToOrigin, true);
+  assert.equal(course.stayMinutes, 15);
+  assert.equal(course.routing.durationMin, 25);
+  assert.equal(course.visitDurationMin, 30);
+  assert.equal(course.totalDurationMin, 55);
+  assert.deepEqual(course.routing.coordinates.at(-1), [origin.lat, origin.lon]);
+  assert.match(result.body.message, /복귀/);
+});
+
+test('zero-minute pass-through drive and thirty-minute sightseeing use the exact selected stay budget', async () => {
+  for (const stayMinutes of [0, 30]) {
+    const mock = upstream();
+    const result = await request({ ...input, preferences: { maxMinutes: 120, theme: 'all', stayMinutes } }, mock);
+    assert.equal(result.body.status, 'ok');
+    const course = result.body.courses[0];
+    assert.equal(course.stayMinutes, stayMinutes);
+    assert.equal(course.visitDurationMin, 3 * stayMinutes);
+    assert.equal(course.totalDurationMin, 20 + 3 * stayMinutes);
+    const supplied = JSON.parse(mock.calls.ai[0].body.input[0].content);
+    assert.equal(supplied.visitMinutesPerStop, stayMinutes);
+    assert.equal(supplied.preferences.stayMinutes, stayMinutes);
+  }
+});
+
+test('zero-minute stays permit a drive below the former thirty-minute sightseeing minimum', async () => {
+  const mock = upstream({ roadResponses: [() => loopRoad(1200)] });
+  const result = await request({ ...input, preferences: { maxMinutes: 25, theme: 'all', returnToOrigin: true, stayMinutes: 0 } }, mock);
+  assert.equal(result.body.status, 'ok');
+  assert.equal(result.body.courses[0].totalDurationMin, 20);
+  assert.equal(result.body.courses[0].visitDurationMin, 0);
+});
+
+test('a return leg that exceeds the budget is rejected instead of quoting the outbound duration', async () => {
+  const mock = upstream({ roadResponses: [() => loopRoad(2700)] });
+  const result = await request({ ...input, preferences: { maxMinutes: 60, theme: 'all', returnToOrigin: true, stayMinutes: 15 } }, mock);
+  assert.equal(result.body.status, 'no_feasible_route');
+  assert.deepEqual(result.body.courses, []);
+  assert.equal(mock.calls.road.length, 1);
+  for (const { url } of mock.calls.road) assert.equal(url.searchParams.get('destination'), `${origin.lon},${origin.lat}`);
+  assert.equal(mock.calls.road[0].url.searchParams.get('waypoints').split('|').length, 2);
+});
+
+test('round-trip geometry must actually return near the requested origin', async () => {
+  const mock = upstream();
+  const result = await request({ ...input, preferences: { ...input.preferences, returnToOrigin: true } }, mock);
+  assert.equal(result.status, 502);
+  assert.equal(mock.calls.road.length, 1);
+});
+
+test('trip preferences are strict and invalid stay values never reach upstream services', async () => {
+  for (const preferences of [
+    ...['true', 1, null, {}, []].map(returnToOrigin => ({ ...input.preferences, returnToOrigin })),
+    ...[-1, 1, 14, 16, 31, 1.5, '15', null, true].map(stayMinutes => ({ ...input.preferences, stayMinutes })),
+  ]) {
+    let calls = 0;
+    const result = await request({ ...input, preferences }, { fetchImpl: () => { calls++; throw new Error('No upstream allowed'); } });
+    assert.equal(result.status, 400);
+    assert.equal(calls, 0);
+  }
+});
+
+test('same stops with different return or stay semantics do not share the same saved course ID', async () => {
+  const legacy = await request(input, upstream());
+  const loop = await request({ ...input, preferences: { ...input.preferences, returnToOrigin: true } }, upstream({ roadResponses: [() => loopRoad()] }));
+  const passThrough = await request({ ...input, preferences: { ...input.preferences, stayMinutes: 0 } }, upstream());
+  assert.equal(new Set([legacy, loop, passThrough].map(r => r.body.courses[0].id)).size, 3);
+});
+
+test('oversized model itineraries are capped before the first road request and expose no hidden native stops', async () => {
+  for (const returnToOrigin of [false, true]) {
+    const mock = upstream({ itinerary: { placeIds: ['101', '102', '103', '104'], title: '네 공원 모두', reason: '네 장소 방문' }, roadResponses: [() => returnToOrigin ? loopRoad(1200) : kakao(1200)] });
+    const result = await request({ ...input, preferences: { maxMinutes: 120, theme: 'all', returnToOrigin, stayMinutes: 15 } }, mock);
+    assert.equal(result.body.status, 'ok');
+    const expected=returnToOrigin?2:3,course=result.body.courses[0];
+    assert.equal(mock.calls.road.length, 1);
+    assert.equal(course.spots.length, expected);
+    assert.equal(course.visitDurationMin, expected * 15);
+    assert.equal(course.totalDurationMin, 20 + expected * 15);
+    assert.equal(mock.calls.road[0].url.searchParams.get('waypoints').split('|').length, 2);
+    assert.ok(!mock.calls.road[0].url.toString().includes(encodeURIComponent(`${places[3].mapx},${places[3].mapy}`)));
+    assert.ok(!course.title.includes('네 공원'));
+    assert.ok(!course.reason.includes('네 장소'));
+    assert.equal(mock.calls.ai[0].body.text.format.schema.properties.placeIds.maxItems, expected);
+  }
 });

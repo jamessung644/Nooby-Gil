@@ -19,6 +19,8 @@ import android.media.MediaCodecList;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
+import android.media.MediaMetadataRetriever;
+import android.net.Uri;
 import android.os.Build;
 import android.os.SystemClock;
 
@@ -37,7 +39,7 @@ import java.util.UUID;
 import java.util.concurrent.CancellationException;
 
 /**
- * Offline 9:16 photo recap encoder. Call export on a worker, never on the UI thread.
+ * Offline 9:16 photo and imported-video recap encoder. Call export on a worker, never on the UI thread.
  * The output contains H.264 video AND a newly synthesized AAC soundtrack. It does
  * not record a camera, microphone, another driver, or any licensed music service.
  */
@@ -53,12 +55,15 @@ public final class RecapVideoExporter {
     public interface Progress { void update(int percent); }
 
     public static final class Frame {
-        public final String assetPath, title, credit;
+        public final String assetPath, title, credit, videoUri;
+        public final long startMs,endMs;
         public Frame(String assetPath, String title, String credit) {
-            this.assetPath = assetPath;
+            this.assetPath = assetPath;this.videoUri=null;this.startMs=0;this.endMs=0;
             this.title = clean(title, 70);
             this.credit = clean(credit, 160);
         }
+        public Frame(String uri,long startMs,long endMs,String title){this.assetPath=null;this.videoUri=uri;this.startMs=startMs;this.endMs=endMs;this.title=clean(title,70);this.credit="사용자가 가져온 영상";}
+        public boolean personal(){return videoUri!=null;}
     }
 
     private RecapVideoExporter() { }
@@ -66,17 +71,17 @@ public final class RecapVideoExporter {
     /**
      * Writes a complete, independently playable MP4, or removes only this call's
      * partial files on failure. A nonempty existing output is never overwritten.
-     * Only the bundled, attributed demo photographs are accepted by this version.
+     * Accepts attributed bundled photos and user-selected content URI video clips.
      */
     public static File export(Context context, List<Frame> frames, String mood,
             String caption, File output, CancelCheck cancel, Progress progress) throws Exception {
         if (context == null || output == null) throw new IllegalArgumentException("Context and output are required");
         if (frames == null || frames.isEmpty() || frames.size() > 8)
-            throw new IllegalArgumentException("Choose one to eight sample photographs");
+            throw new IllegalArgumentException("Choose one to eight valid scenes");
         ArrayList<Frame> selected = new ArrayList<>(frames);
         for (Frame frame : selected) {
-            if (frame == null || creditFor(frame.assetPath) == null)
-                throw new IllegalArgumentException("Only attributed SCENIC sample photographs are supported");
+            if (frame == null || (frame.personal()?(!frame.videoUri.startsWith("content://")||frame.startMs<0||frame.endMs-frame.startMs<1000||frame.endMs-frame.startMs>8000):creditFor(frame.assetPath) == null))
+                throw new IllegalArgumentException("Choose valid imported clips or attributed sample photographs");
         }
         if (output.exists() && output.length() != 0) throw new IOException("An export already exists at this path");
         File parent = output.getAbsoluteFile().getParentFile();
@@ -87,9 +92,13 @@ public final class RecapVideoExporter {
         File complete = new File(parent, token + ".complete.mp4");
         Guard guard = new Guard(cancel, progress);
         ArrayList<Bitmap> images = new ArrayList<>();
+        ArrayList<MediaMetadataRetriever> clips=new ArrayList<>();
+        final double duration=durationSeconds(selected);
         try {
             guard.check();
             for (Frame frame : selected) {
+                if(frame.personal()){MediaMetadataRetriever retriever=new MediaMetadataRetriever();try{retriever.setDataSource(context,Uri.parse(frame.videoUri));long length=Long.parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION));if(frame.endMs>length)throw new IOException("Selected clip exceeds source duration");clips.add(retriever);images.add(null);}catch(Exception e){try{retriever.release();}catch(Exception ignored){}throw e;}continue;}
+                clips.add(null);
                 try (InputStream stream = context.getAssets().open(frame.assetPath)) {
                     BitmapFactory.Options options = new BitmapFactory.Options();
                     options.inPreferredConfig = Bitmap.Config.ARGB_8888;
@@ -100,17 +109,18 @@ public final class RecapVideoExporter {
                 }
             }
             guard.progress(1);
-            encodeVideo(selected, images, cleanCaption(caption), video, guard);
-            encodeAudio(mood, audio, guard);
-            combine(video, audio, complete, guard);
-            verifyTracks(complete);
+            encodeVideo(selected, images, clips, cleanCaption(caption), video, guard,duration);
+            encodeAudio(mood, audio, guard,duration);
+            combine(video, audio, complete, guard,duration);
+            verifyTracks(complete,duration);
             guard.check();
             if (output.exists() && (output.length() != 0 || !output.delete())) throw new IOException("Cannot replace existing export file");
             if (!complete.renameTo(output)) throw new IOException("Cannot finish export file");
             guard.progress(100);
             return output;
         } finally {
-            for (Bitmap image : images) image.recycle();
+            for (Bitmap image : images) if(image!=null)image.recycle();
+            for(MediaMetadataRetriever clip:clips)if(clip!=null)try{clip.release();}catch(Exception ignored){}
             // These names were created exclusively for this export, not supplied by a user.
             video.delete();
             audio.delete();
@@ -118,18 +128,19 @@ public final class RecapVideoExporter {
         }
     }
 
-    private static void encodeVideo(List<Frame> frames, List<Bitmap> images,
-            String caption, File output, Guard guard) throws Exception {
+    private static void encodeVideo(List<Frame> frames, List<Bitmap> images,List<MediaMetadataRetriever> clips,
+            String caption, File output, Guard guard,double duration) throws Exception {
         Encoder encoder = createVideoEncoder(output);
         Bitmap canvasBitmap = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(canvasBitmap);
         int[] pixels = new int[WIDTH * HEIGHT];
         byte[] yuv = new byte[WIDTH * HEIGHT * 3 / 2];
         try {
-            for (int index = 0; index < SECONDS * FPS; index++) {
+            int totalFrames=(int)Math.ceil(duration*FPS);
+            for (int index = 0; index < totalFrames; index++) {
                 guard.check();
                 double seconds = index / (double) FPS;
-                render(canvas, frames, images, caption, seconds);
+                render(canvas, frames, images, clips,caption, seconds);
                 canvasBitmap.getPixels(pixels, 0, WIDTH, 0, 0, WIDTH, HEIGHT);
                 convertToYuv(pixels, yuv);
                 int input = encoder.input(guard);
@@ -155,9 +166,9 @@ public final class RecapVideoExporter {
                 }
                 encoder.codec.queueInputBuffer(input, 0, size, index * 1000000L / FPS, 0);
                 encoder.drain(false, guard);
-                guard.progress(2 + (index + 1) * 70 / (SECONDS * FPS));
+                guard.progress(2 + (index + 1) * 70 / totalFrames);
             }
-            encoder.end(SECONDS * 1000000L, guard);
+            encoder.end((long)(duration * 1000000L), guard);
             encoder.finish();
         } finally {
             canvasBitmap.recycle();
@@ -220,7 +231,7 @@ public final class RecapVideoExporter {
         CodecChoice(String name, int color, boolean software) { this.name = name; this.color = color; this.software = software; }
     }
 
-    private static void encodeAudio(String mood, File output, Guard guard) throws Exception {
+    private static void encodeAudio(String mood, File output, Guard guard,double duration) throws Exception {
         MediaCodec codec = MediaCodec.createEncoderByType(AUDIO_MIME);
         Encoder encoder = null;
         try {
@@ -231,7 +242,7 @@ public final class RecapVideoExporter {
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             codec.start();
             encoder = new Encoder(codec, new MediaMuxer(output.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4), 0);
-            final int count = SAMPLE_RATE * SECONDS;
+            final int count = (int)Math.ceil(SAMPLE_RATE * duration);
             int sample = 0;
             double[] notes = notesFor(mood);
             while (sample < count) {
@@ -243,13 +254,13 @@ public final class RecapVideoExporter {
                 buffer.order(ByteOrder.LITTLE_ENDIAN);
                 int amount = Math.min(1024, Math.min(count - sample, buffer.remaining() / 2));
                 if (amount == 0) throw new IOException("Audio input buffer is too small");
-                for (int i = 0; i < amount; i++) buffer.putShort(synthSample(sample + i, notes, mood));
+                for (int i = 0; i < amount; i++) buffer.putShort(synthSample(sample + i, notes, mood,duration));
                 codec.queueInputBuffer(input, 0, amount * 2, sample * 1000000L / SAMPLE_RATE, 0);
                 sample += amount;
                 encoder.drain(false, guard);
                 guard.progress(72 + sample * 19 / count);
             }
-            encoder.end(SECONDS * 1000000L, guard);
+            encoder.end((long)(duration * 1000000L), guard);
             encoder.finish();
         } finally {
             if (encoder != null) encoder.close();
@@ -258,7 +269,8 @@ public final class RecapVideoExporter {
     }
 
     /** Every PCM sample is generated here: no captured or externally sourced music. */
-    private static short synthSample(int sample, double[] notes, String mood) {
+    private static short synthSample(int sample, double[] notes, String mood) {return synthSample(sample,notes,mood,SECONDS);}
+    private static short synthSample(int sample, double[] notes, String mood,double duration) {
         double t = sample / (double) SAMPLE_RATE;
         double pad = 0, twoPi = Math.PI * 2;
         for (int voice = 0; voice < notes.length; voice++) {
@@ -271,7 +283,7 @@ public final class RecapVideoExporter {
         double bellEnvelope = (1.0 - Math.exp(-age * 16)) * Math.exp(-age * 1.8);
         double frequency = notes[(step + 2) % notes.length] * 2;
         double bell = (Math.sin(twoPi * frequency * t) + 0.1 * Math.sin(twoPi * frequency * 2 * t)) * bellEnvelope;
-        double fade = Math.max(0, Math.min(1, Math.min(t / 0.45, (SECONDS - t) / 0.9)));
+        double fade = Math.max(0, Math.min(1, Math.min(t / 0.45, (duration - t) / 0.9)));
         double value = (pad * 0.047 + bell * 0.09) * fade;
         return (short) Math.round(Math.max(-0.8, Math.min(0.8, value)) * 32767);
     }
@@ -370,7 +382,7 @@ public final class RecapVideoExporter {
         }
     }
 
-    private static void combine(File video, File audio, File output, Guard guard) throws IOException {
+    private static void combine(File video, File audio, File output, Guard guard,double duration) throws IOException {
         MediaExtractor[] extractors = {new MediaExtractor(), new MediaExtractor()};
         MediaMuxer muxer = null;
         boolean started = false;
@@ -403,7 +415,7 @@ public final class RecapVideoExporter {
                 info.set(0, count, source.getSampleTime(), source.getSampleFlags());
                 muxer.writeSampleData(tracks[next], data, info);
                 source.advance();
-                guard.progress(91 + (int) Math.min(8, info.presentationTimeUs * 8 / (SECONDS * 1000000L)));
+                guard.progress(91 + (int) Math.min(8, info.presentationTimeUs * 8 / (duration * 1000000L)));
             }
             muxer.stop();
             started = false;
@@ -416,7 +428,7 @@ public final class RecapVideoExporter {
         }
     }
 
-    private static void verifyTracks(File output) throws IOException {
+    private static void verifyTracks(File output,double expectedDuration) throws IOException {
         MediaExtractor extractor = new MediaExtractor();
         boolean video = false, audio = false;
         try {
@@ -429,7 +441,7 @@ public final class RecapVideoExporter {
                 } else if (AUDIO_MIME.equals(mime)) { audio = true; }
                 if (format.containsKey(MediaFormat.KEY_DURATION)) {
                     long duration = format.getLong(MediaFormat.KEY_DURATION);
-                    if (duration < 11500000L || duration > 13000000L) throw new IOException("The recap track has an invalid duration");
+                    if (duration < expectedDuration*1000000L-500000L || duration > expectedDuration*1000000L+1000000L) throw new IOException("The recap track has an invalid duration");
                 }
             }
             if (!video || !audio) throw new IOException("A complete video and soundtrack are required");
@@ -488,17 +500,22 @@ public final class RecapVideoExporter {
         }
     }
 
-    private static void render(Canvas canvas, List<Frame> frames, List<Bitmap> images,
-            String caption, double seconds) {
-        if (seconds >= PHOTO_SECONDS) { renderCredits(canvas, frames); return; }
+    public static double durationSeconds(List<Frame> frames){double content=0;boolean personal=false;for(Frame frame:frames)personal|=frame.personal();if(!personal)return SECONDS;for(Frame frame:frames)content+=frame.personal()?(frame.endMs-frame.startMs)/1000.0:3;return content+3;}
+    private static void render(Canvas canvas, List<Frame> frames, List<Bitmap> images,List<MediaMetadataRetriever> clips,
+            String caption, double seconds) throws IOException {
+        boolean personal=false;for(Frame f:frames)personal|=f.personal();
+        double content=durationSeconds(frames)-3;
+        if (seconds >= content) { renderCredits(canvas, frames); return; }
         canvas.drawColor(Color.BLACK);
-        double span = PHOTO_SECONDS / (double) frames.size();
-        int index = Math.min(frames.size() - 1, (int) (seconds / span));
-        double age = seconds - index * span;
-        double fraction = age / span;
-        if (index > 0 && age < 0.35) drawPhoto(canvas, images.get(index - 1), 1.07f, 255);
-        int alpha = age < 0.35 ? (int) (255 * age / 0.35) : 255;
-        drawPhoto(canvas, images.get(index), (float) (1 + 0.07 * fraction), alpha);
+        int index=0;double age=seconds,span=personal?(frames.get(0).personal()?(frames.get(0).endMs-frames.get(0).startMs)/1000.0:3):PHOTO_SECONDS/(double)frames.size();
+        while(index<frames.size()-1&&age>=span){age-=span;index++;Frame next=frames.get(index);span=personal?(next.personal()?(next.endMs-next.startMs)/1000.0:3):PHOTO_SECONDS/(double)frames.size();}
+        double fraction=age/span;Frame selected=frames.get(index);
+        if(selected.personal()){
+            long at=Math.min(selected.endMs-1,selected.startMs+(long)(age*1000));
+            Bitmap decoded=clips.get(index).getScaledFrameAtTime(at*1000,MediaMetadataRetriever.OPTION_CLOSEST,WIDTH,HEIGHT);
+            if(decoded==null)throw new IOException("A selected video frame could not be decoded");
+            try{drawPhoto(canvas,decoded,1f,255);}finally{decoded.recycle();}
+        }else{int alpha=age<0.35?(int)(255*age/0.35):255;drawPhoto(canvas,images.get(index),(float)(1+0.07*fraction),alpha);}
         Paint shade = new Paint();
         shade.setShader(new LinearGradient(0, 310, 0, HEIGHT, 0x00000000, 0xe8000000, Shader.TileMode.CLAMP));
         canvas.drawRect(0, 270, WIDTH, HEIGHT, shade);
@@ -509,7 +526,7 @@ public final class RecapVideoExporter {
         Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
         pill.setColor(0xccffffff);
         canvas.drawRoundRect(new RectF(24, 51, 185, 75), 12, 12, pill);
-        canvas.drawText("샘플 사진 · 실제 촬영 아님", 35, 67, textPaint(10, 0xff262a2c, false));
+        canvas.drawText(selected.personal()?"내가 가져온 영상":"샘플 사진 · 실제 촬영 아님", 35, 67, textPaint(10, 0xff262a2c, false));
         String[] captionParts = caption.split("\\n", 2);
         String memory = captionParts.length == 2 ? captionParts[1] : caption;
         if (captionParts.length == 2) {
@@ -533,8 +550,8 @@ public final class RecapVideoExporter {
                 canvas.drawRoundRect(new RectF(x, 598, x + fill, 601), 1.5f, 1.5f, bar);
             }
         }
-        String creator = creditFor(frame.assetPath).creator;
-        drawLines(canvas, "사진 " + creator + " · 원본 출처는 마지막 화면", 24, 621, 312,
+        String creator = frame.personal()?"가져온 영상 · 원본 소리 대신 합성 음악": "사진 "+creditFor(frame.assetPath).creator+" · 원본 출처는 마지막 화면";
+        drawLines(canvas, creator, 24, 621, 312,
                 textPaint(8, 0xffe7e8e9, false), 10, 1);
     }
 
@@ -551,11 +568,13 @@ public final class RecapVideoExporter {
         canvas.drawColor(0xfff4f1ea);
         Paint heading = textPaint(26, 0xff202828, true);
         canvas.drawText("장면을 남긴 사람들", 24, 47, heading);
-        canvas.drawText("SAMPLE PHOTOGRAPHS / PHOTO CREDITS", 24, 70, textPaint(9, 0xff59605f, true));
-        float y = drawLines(canvas, "이 영상은 공개 샘플 사진을 편집한 체험 결과입니다. 사용자의 실제 주행·차량 촬영 기록이 아닙니다.",
+        boolean personal=false;for(Frame frame:frames)personal|=frame.personal();
+        canvas.drawText(personal?"PERSONAL CLIPS / MADE ON DEVICE":"SAMPLE PHOTOGRAPHS / PHOTO CREDITS", 24, 70, textPaint(9, 0xff59605f, true));
+        float y = drawLines(canvas, personal?"사용자가 선택한 영상 구간으로 만든 리캡입니다. 원본 소리 대신 SCENIC 합성 음악을 넣었습니다. 원본 파일은 변경하지 않았습니다.":"이 영상은 공개 샘플 사진을 편집한 체험 결과입니다. 사용자의 실제 주행·차량 촬영 기록이 아닙니다.",
                 24, 96, 312, textPaint(11, 0xff343c3b, false), 16, 3) + 19;
         Map<String, Credit> used = new LinkedHashMap<>();
-        for (Frame frame : frames) used.put(frame.assetPath, creditFor(frame.assetPath));
+        for (Frame frame : frames) if(!frame.personal())used.put(frame.assetPath, creditFor(frame.assetPath));
+        if(personal){for(Frame frame:frames)if(frame.personal()){y=drawLines(canvas,frame.title,24,y,312,textPaint(12,0xff202828,true),17,2)+12;if(y>460)break;}}
         for (Credit credit : used.values()) {
             y = drawLines(canvas, credit.title + " / " + credit.creator, 24, y, 312,
                     textPaint(10, 0xff202828, true), 13, 2);
@@ -565,11 +584,11 @@ public final class RecapVideoExporter {
             y = drawLines(canvas, credit.source, 24, y + 2, 312, textPaint(8, 0xff46504e, false), 10, 3);
             y += 17;
         }
-        drawLines(canvas, "사진에 화면비 크롭·이동·자막을 적용했습니다. 각 사진의 표시된 라이선스와 출처를 유지합니다.",
+        drawLines(canvas, personal?"가져온 영상은 세로 화면에 맞춰 잘라 표시하고 메모를 더했습니다. 이 영상과 원본을 외부 서버에 전송하지 않았습니다.":"사진에 화면비 크롭·이동·자막을 적용했습니다. 각 사진의 표시된 라이선스와 출처를 유지합니다.",
                 24, 536, 312, textPaint(9, 0xff46504e, false), 13, 3);
         canvas.drawText("음악: SCENIC 오리지널 신시사이저 · 기기에서 생성", 24, 590, textPaint(9, 0xff46504e, false));
         canvas.drawText("SCENIC", 24, 620, textPaint(15, 0xff202828, true));
-        canvas.drawText("12 SEC / MADE ON DEVICE", 190, 620, textPaint(8, 0xff59605f, true));
+        canvas.drawText(Math.round(durationSeconds(frames))+" SEC / MADE ON DEVICE", 190, 620, textPaint(8, 0xff59605f, true));
     }
 
     private static Paint textPaint(float size, int color, boolean bold) {
