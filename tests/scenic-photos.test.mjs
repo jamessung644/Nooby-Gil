@@ -2,19 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { createServer } from '../server/index.mjs';
-import { createScenicSelectionSigner, findScenicPhotos, safeTourPhotoUrl } from '../server/scenic-photos.mjs';
+import { createScenicSelectionSigner, findScenicPhotos as findPhotos, safeTourPhotoUrl } from '../server/scenic-photos.mjs';
 import { planDestinationRoutes } from '../server/destination-routes.mjs';
 
 const destination = { id: 'haeundae', name: '해운대해수욕장', address: '부산 해운대구', lat: 35.1587, lon: 129.1604 };
 const origin = { lat: 35.1152, lon: 129.0422 };
 const place = { id: 'tour-123', name: '광안리해수욕장', address: '부산 수영구', lat: 35.153, lon: 129.118 };
 const input = { destination, radiusMeters: 10000 };
+const findScenicPhotos = (input, options) => findPhotos(input, { catalog: { places: [] }, ...options });
 const env = { TOUR_API_KEY: 'test-private-tour', OPENAI_API_KEY: 'test-private-openai', KAKAO_REST_API_KEY: 'test-private-kakao' };
 const image = id => `https://tong.visitkorea.or.kr/cms/resource/10/${id}_image2_1.jpg`;
 const item = (id = '123', extra = {}) => ({ contentid: id, contenttypeid: '12', title: '공개 관광 사진', addr1: '부산', mapx: '129.118', mapy: '35.153', cpyrhtDivCd: 'Type1', firstimage: image(id), firstimage2: image(`${id}_small`), ...extra });
 const tour = items => Response.json({ response: { header: { resultCode: '0000' }, body: { items: { item: items } } } });
 const ai = rows => Response.json({ status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ photos: rows }) }] }] });
-const row = (id = '123', extra = {}) => ({ id: `tour-photo-${id}`, score: 88, scene: 'coast', reason: '사진에 넓은 수변과 해안선이 보입니다.', ...extra });
+const row = (id = '123', extra = {}) => ({ id: `tour-photo-${id}`, score: 88, landscapeSuitable: true, scene: 'coast', reason: '사진에 넓은 수변과 해안선이 보입니다.', ...extra });
 function route(coordinates, seconds = 1200, code = 0) {
   return Response.json({ routes: [{ result_code: code, summary: { duration: seconds, distance: 18000 }, sections: [{ roads: [{ vertexes: coordinates.flatMap(([lat, lon]) => [lon, lat]) }] }] }] });
 }
@@ -115,7 +116,7 @@ test('AI unavailable, malformed, hallucinated, duplicated or incomplete results 
 
 test('vision scores change ordering using allowlisted image IDs without substituting place metadata', async () => {
   let calls = 0;
-  const result = await findScenicPhotos(input, { env, fetchImpl: async () => ++calls === 1 ? tour([item('123'), item('124', { mapx: '129.17' })]) : ai([row('123', { score: 99 }), row('124', { score: 20 })]) });
+  const result = await findScenicPhotos(input, { env, fetchImpl: async () => ++calls === 1 ? tour([item('123'), item('124', { mapx: '129.17' })]) : ai([row('123', { score: 99 }), row('124', { score: 60 })]) });
   assert.deepEqual(result.photos.map(photo => photo.id), ['tour-photo-123', 'tour-photo-124']);
   assert.equal(result.photos[0].place.lon, 129.118);
 });
@@ -199,4 +200,173 @@ test('HTTP photo and routing endpoints share signer, while another server reject
   const restarted = await request(createServer({ env, fetchImpl: async () => assert.fail('No provider expected') }), '/api/destination-routes', payload);
   assert.equal(restarted.status, 409);
   assert.match(restarted.body.error, /再|다시/);
+});
+
+test('indoor attractions, monuments, stations and walking-only destinations are excluded before image analysis', async () => {
+  const excluded = ['해안 박물관', '숲 미술관', '강릉역', '속초터미널', '충무공 동상', '기념비', '남산순환나들길',
+    '해안산책로', '해파랑길', '전망 스카이워크', '백두산 정상', '경포 탐방로', '남해 바래길'];
+  const items = excluded.map((title, i) => item(String(100 + i), { title }));
+  items.push(item('250', { title: '등대 전망 장소', lclsSystm3: 'VE040300' }));
+  let calls = 0;
+  const result = await findScenicPhotos(input, { env, fetchImpl: async () => { calls++; return tour(items); } });
+  assert.equal(calls, 1); assert.equal(result.photos.length, 0);
+  assert.equal(result.ranking.mode, 'distance');
+  assert.match(result.ranking.message, /찾지 못했습니다/);
+});
+
+test('natural viewpoints and coast candidates reach the bounded image request ahead of generic nearby attractions', async () => {
+  const items = Array.from({ length: 14 }, (_, i) => item(String(100 + i), { title: '일반 관광 장소', mapx: String(129.16 + i * .0001) }));
+  items.push(item('999', { title: '해안 전망대', mapx: '129.12' }));
+  const result = await findScenicPhotos(input, { env: { TOUR_API_KEY: 'x' }, fetchImpl: async () => tour(items) });
+  assert.equal(result.photos.length, 12);
+  assert.ok(result.photos.some(photo => photo.id === 'tour-photo-999'));
+  assert.deepEqual(result.photos.map(photo => photo.distanceMeters), result.photos.map(photo => photo.distanceMeters).sort((a, b) => a - b));
+  assert.ok(result.photos.every(photo => photo.visualScore === null));
+});
+
+test('actual image suitability overrides attractive place names and can return an honest empty vision result', async () => {
+  let calls = 0;
+  const result = await findScenicPhotos(input, { env, fetchImpl: async () => ++calls === 1
+    ? tour([item('123', { title: '해안 전망대' }), item('124', { title: '푸른 바다 해변' }), item('125', { title: '도시 야경' })])
+    : ai([row('123', { landscapeSuitable: false, score: 90, reason: '사진은 안내판 중심입니다.' }), row('124', { score: 54 }), row('125', { scene: 'all' })]) });
+  assert.equal(result.ranking.mode, 'vision'); assert.equal(result.ranking.provider, 'OpenAI');
+  assert.deepEqual(result.photos, []);
+  assert.match(result.ranking.message, /실제 이미지를 평가했지만/);
+});
+
+test('image suitability must be a real boolean and qualifying pictures retain source coordinates without extra public fields', async () => {
+  for (const suitable of [undefined, 'true', 1]) {
+    let calls = 0;
+    const result = await findScenicPhotos(input, { env, fetchImpl: async () => ++calls === 1 ? tour([item()]) : ai([row('123', { landscapeSuitable: suitable })]) });
+    assert.equal(result.ranking.mode, 'distance'); assert.equal(result.photos[0].visualScore, null);
+  }
+  let calls = 0;
+  const good = await findScenicPhotos(input, { env, fetchImpl: async () => ++calls === 1 ? tour([item()]) : ai([row('123', { score: 55 })]) });
+  assert.equal(good.ranking.mode, 'vision'); assert.equal(good.photos.length, 1);
+  assert.ok(!Object.hasOwn(good.photos[0], 'landscapeSuitable'));
+  assert.equal(good.photos[0].place.lat, 35.153);
+});
+
+test('photo-destination routes directly to selected photo POI, never to or back to the region anchor', async () => {
+  const signer = createScenicSelectionSigner(), token = signer.issue(destination, place);
+  const calls = [];
+  const result = await planDestinationRoutes({ origin, destination, mode: 'photo-destination', scenicSelection: token, extraMinutes: 0 }, {
+    env, selectionSigner: signer, catalog: { get places() { assert.fail('No substitutions'); } }, fetchImpl: async url => {
+      const parsed = new URL(url); calls.push(parsed);
+      assert.equal(parsed.searchParams.get('destination'), `${place.lon},${place.lat}`);
+      assert.equal(parsed.searchParams.has('waypoints'), false);
+      return route([[origin.lat, origin.lon], [place.lat, place.lon]], 1800);
+    },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(result.mode, 'photo-destination'); assert.equal(result.scenicStatus, 'ok');
+  assert.deepEqual(result.requestedDestination, destination); assert.deepEqual(result.destination, place);
+  assert.deepEqual(result.routes.map(value => value.id), ['fast']);
+  assert.deepEqual(result.routes[0].waypoints, []);
+  assert.deepEqual(result.routes[0].coordinates.at(-1), [place.lat, place.lon]);
+  assert.match(result.message, /촬영 지점이나 주차장 입구가 아닙니다/);
+});
+
+test('photo-destination requires selected token and rejects unknown modes and client target overrides', async () => {
+  for (const bad of [{ origin, destination, mode: 'photo-destination' }, { origin, destination, mode: 'unknown' },
+    { origin, destination, mode: 'photo-destination', scenicSelection: 'bad', photoPlace: place }]) {
+    await assert.rejects(planDestinationRoutes(bad, { env, fetchImpl: async () => assert.fail('No provider expected') }), error => error.status === 400);
+  }
+  const signer = createScenicSelectionSigner(), token = signer.issue(destination, place);
+  await assert.rejects(planDestinationRoutes({ origin, destination: place, mode: 'photo-destination', scenicSelection: token }, { env, selectionSigner: signer, fetchImpl: async () => assert.fail('No provider expected') }), error => error.status === 409);
+});
+
+test('photo-destination requires arrival within 150m, not a nearby pass followed by a different endpoint', async () => {
+  const signer = createScenicSelectionSigner(), token = signer.issue(destination, place);
+  for (const coordinates of [
+    [[origin.lat, origin.lon], [place.lat, place.lon], [destination.lat, destination.lon]],
+    [[origin.lat, origin.lon], [place.lat + .002, place.lon]],
+  ]) {
+    let calls = 0;
+    await assert.rejects(planDestinationRoutes({ origin, destination, mode: 'photo-destination', scenicSelection: token }, { env, selectionSigner: signer,
+      fetchImpl: async () => { calls++; return route(coordinates); } }), error => error.status === 422);
+    assert.equal(calls, 1);
+  }
+  const accepted = await planDestinationRoutes({ origin, destination, mode: 'photo-destination', scenicSelection: token }, { env, selectionSigner: signer,
+    fetchImpl: async () => route([[origin.lat, origin.lon], [place.lat + .001, place.lon]]) });
+  assert.equal(accepted.destination.id, place.id);
+});
+
+test('photo-destination unreachable, provider failure and already-near-photo never manufacture region fallback', async () => {
+  const signer = createScenicSelectionSigner(), token = signer.issue(destination, place);
+  for (const [mock, status] of [[async () => route(baseline, 1200, 104), 422], [async () => { throw new Error('test-private-kakao'); }, 502]]) {
+    let calls = 0;
+    await assert.rejects(planDestinationRoutes({ origin, destination, mode: 'photo-destination', scenicSelection: token }, { env, selectionSigner: signer,
+      fetchImpl: async (...args) => { calls++; return mock(...args); } }), error => error.status === status && !error.message.includes('test-private'));
+    assert.equal(calls, 1);
+  }
+  await assert.rejects(planDestinationRoutes({ origin: { lat: place.lat, lon: place.lon }, destination, mode: 'photo-destination', scenicSelection: token }, { env, selectionSigner: signer, fetchImpl: async () => assert.fail('No provider expected') }), error => error.status === 422);
+  const fromRegion = await planDestinationRoutes({ origin: { lat: destination.lat, lon: destination.lon }, destination, mode: 'photo-destination', scenicSelection: token }, { env, selectionSigner: signer,
+    fetchImpl: async () => route([[destination.lat, destination.lon], [place.lat, place.lon]]) });
+  assert.equal(fromRegion.destination.id, place.id);
+});
+
+test('sparse location index is supplemented with at most eight fresh official details and three concurrent requests', async () => {
+  const catalog = { places: Array.from({ length: 12 }, (_, i) => ({ id: String(1000 + i), title: '해안 해변', lat: 35.153, lon: 129.118 + i * .001, contentTypeId: '12' })) };
+  let active = 0, maximum = 0; const ids = [];
+  const result = await findScenicPhotos(input, { catalog, env: { TOUR_API_KEY: 'x' }, fetchImpl: async (url, options) => {
+    const target = new URL(url);
+    assert.equal(options.redirect, 'error'); assert.ok(options.signal instanceof AbortSignal);
+    if (target.pathname.endsWith('/locationBasedList2')) return tour([]);
+    assert.ok(target.pathname.endsWith('/detailCommon2'));
+    assert.ok(!target.searchParams.has('mapX') && !target.searchParams.has('radius') && !target.searchParams.has('contentTypeId'));
+    const id = target.searchParams.get('contentId'); ids.push(id); active++; maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, 2)); active--;
+    return tour([item(id, { title: '현재 확인된 해변', mapx: '129.12' })]);
+  } });
+  assert.equal(ids.length, 8); assert.equal(new Set(ids).size, 8); assert.equal(maximum, 3);
+  assert.equal(result.photos.length, 8);
+  assert.ok(result.photos.every(photo => photo.place.name === '현재 확인된 해변' && photo.place.lon === 129.12));
+  assert.equal(result.ranking.mode, 'distance');
+});
+
+test('supplement cannot use saved image metadata when current detail is missing, mismatched, unlicensed or outside radius', async () => {
+  const catalog = { places: Array.from({ length: 6 }, (_, i) => ({ id: String(1000 + i), title: '저장된 해변', lat: 35.153, lon: 129.118,
+    firstimage: image('saved'), cpyrhtDivCd: 'Type1' })) };
+  const result = await findScenicPhotos(input, { catalog, env: { TOUR_API_KEY: 'x' }, fetchImpl: async url => {
+    const target = new URL(url); if (target.pathname.endsWith('/locationBasedList2')) return tour([]);
+    const id = target.searchParams.get('contentId');
+    if (id === '1000') return tour([item('999999')]);
+    if (id === '1001') return tour([item(id, { cpyrhtDivCd: '' })]);
+    if (id === '1002') return tour([item(id, { cpyrhtDivCd: 'Type3' })]);
+    if (id === '1003') return tour([item(id, { mapy: '37.5' })]);
+    if (id === '1004') return tour([item(id, { firstimage: '' })]);
+    return tour([]);
+  } });
+  assert.deepEqual(result.photos, []);
+  assert.match(result.ranking.message, /일부 장소의 최신 사진은 확인하지 못했습니다/);
+  assert.ok(!JSON.stringify(result).includes(image('saved')));
+});
+
+test('supplement excludes stale foreign, walking-only, duplicate and unsafe IDs while retaining good partial details', async () => {
+  const good = { id: '1234', title: '해변', lat: 35.153, lon: 129.118 };
+  const catalog = { places: [good, good, { ...good, id: '12?secret' }, { ...good, id: '2', lat: 50 },
+    { ...good, id: '3', title: '해안 산책로' }, { ...good, id: '4', contentTypeId: '39' }, { ...good, id: '5' }] };
+  const ids = [];
+  const result = await findScenicPhotos(input, { catalog, env: { TOUR_API_KEY: 'x' }, fetchImpl: async url => {
+    const target = new URL(url); if (target.pathname.endsWith('/locationBasedList2')) return tour([]);
+    const id = target.searchParams.get('contentId'); ids.push(id);
+    if (id === '5') throw new Error('private-provider-value');
+    return tour([item(id, { title: '새로 확인된 바다' })]);
+  } });
+  assert.deepEqual(ids.sort(), ['1234', '5']);
+  assert.equal(result.photos.length, 1); assert.equal(result.photos[0].place.id, 'tour-1234');
+  assert.match(result.ranking.message, /일부 장소/);
+  assert.ok(!JSON.stringify(result).includes('private-provider-value'));
+});
+
+test('overall deadline prevents late detail and AI calls instead of extending the UI wait', async () => {
+  const originalNow = Date.now; let now = originalNow(), calls = 0;
+  Date.now = () => now;
+  try {
+    const result = await findScenicPhotos(input, { env, catalog: { places: [{ id: '1234', title: '해변', lat: 35.153, lon: 129.118 }] },
+      fetchImpl: async () => { calls++; now += 70001; return tour([]); } });
+    assert.equal(calls, 1); assert.deepEqual(result.photos, []);
+    assert.match(result.ranking.message, /일부 장소/);
+  } finally { Date.now = originalNow; }
 });

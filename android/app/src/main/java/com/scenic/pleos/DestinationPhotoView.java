@@ -58,7 +58,7 @@ public final class DestinationPhotoView {
     private DestinationPlace destination;
     private ScenicPhotoCollection collection;
     private LinearLayout body;
-    private boolean active,destroyed,wide,loading;
+    private boolean active,destroyed,wide,loading,regionMode;
     private int radius=10000,generation;
     private String error="",loadedBase="";
     private Future<?> requestJob;
@@ -69,9 +69,12 @@ public final class DestinationPhotoView {
     public DestinationPhotoView(Activity activity,Host host){this.activity=activity;this.host=host;}
 
     public View createView(DestinationPlace chosen,boolean wide){
+        return createView(chosen,wide,false);
+    }
+    public View createView(DestinationPlace chosen,boolean wide,boolean regionMode){
         if(chosen==null)throw new IllegalArgumentException("A chosen destination is required");
-        boolean changed=destination==null||!sameDestination(destination,chosen)||!host.serverBaseUrl().equals(loadedBase);
-        pause();this.destination=chosen;this.wide=wide;active=true;
+        boolean changed=destination==null||!sameDestination(destination,chosen)||!host.serverBaseUrl().equals(loadedBase)||this.regionMode!=regionMode;
+        pause();this.destination=chosen;this.wide=wide;this.regionMode=regionMode;active=true;
         if(changed){radius=10000;collection=null;error="";failedImages.clear();}
         body=column();body.setPadding(dp(12),dp(12),dp(12),dp(30));
         ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);scroll.addView(body);
@@ -101,29 +104,29 @@ public final class DestinationPhotoView {
 
     private void render(){
         if(body==null||destroyed)return;body.removeAllViews();controls.clear();
-        body.addView(text("DESTINATION · SCENIC PHOTOS",12,GREEN,true));gap(body,10);
-        body.addView(text(destination.name+" 근처, 마음에 드는 풍경",wide?30:25,INK,true));gap(body,10);
+        body.addView(text(regionMode?"01 지역  →  02 풍경  →  03 맛집·주차":"DESTINATION · SCENIC PHOTOS",12,GREEN,true));gap(body,10);
+        body.addView(text(destination.name+(regionMode?"에서 가보고 싶은 풍경":" 근처, 마음에 드는 풍경"),wide?30:25,INK,true));gap(body,10);
         LinearLayout fixed=column();fixed.setPadding(dp(18),dp(15),dp(18),dp(15));fixed.setBackground(background(SOFT,0));
-        fixed.addView(text("최종 목적지  ·  "+destination.name,19,GREEN,true));gap(fixed,5);
-        fixed.addView(text("사진 속 장소를 경유해도 마지막 도착지는 그대로예요.",14,INK,false));
+        fixed.addView(text((regionMode?"선택한 지역  ·  ":"최종 목적지  ·  ")+destination.name,19,GREEN,true));gap(fixed,5);
+        fixed.addView(text(regionMode?"마음에 드는 사진의 관광 장소를 이번 드라이브 목적지로 정해요.":"사진 속 장소를 경유해도 마지막 도착지는 그대로예요.",14,INK,false));
         if(!destination.address.isEmpty()){gap(fixed,5);fixed.addView(text(destination.address,13,MUTED,false));}
         body.addView(fixed,size(-1,-2));gap(body,16);
         LinearLayout actions=wide?row():column();
         LinearLayout ranges=row();for(int km:new int[]{5,10,20}){TextView option=button(km+"km",radius==km*1000,()->{radius=km*1000;collection=null;refresh();});LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-2,1);p.setMargins(0,0,dp(6),0);ranges.addView(option,p);}
         if(wide)actions.addView(ranges,new LinearLayout.LayoutParams(0,-2,1));else actions.addView(ranges,size(-1,-2));
-        TextView retry=button("사진 새로 불러오기",false,this::refresh),skip=button("사진 없이 빠른 길",false,host::onSkip);
+        TextView retry=button("사진 새로 불러오기",false,this::refresh),skip=button(regionMode?"지역 중심으로 바로 가기":"사진 없이 빠른 길",false,host::onSkip);
         skipButton=skip;skip.setOnClickListener(v->{if(allowed()){cancelRequests();host.onSkip();}});
         if(wide){space(actions,10);actions.addView(retry);space(actions,10);actions.addView(skip);}else{gap(actions,8);actions.addView(retry,size(-1,-2));gap(actions,8);actions.addView(skip,size(-1,-2));}
         body.addView(actions,size(-1,-2));gap(body,8);
-        body.addView(text("목적지에서 직선거리 "+radius/1000+"km 이내 · 실제 도로 우회시간은 사진을 고른 다음 확인해요.",13,MUTED,false));gap(body,10);
+        body.addView(text((regionMode?"지역 탐색 중심":"목적지")+"에서 직선거리 "+radius/1000+(regionMode?"km 이내 · 사진을 고른 뒤 그 장소까지의 도로 경로를 확인해요.":"km 이내 · 실제 도로 우회시간은 사진을 고른 다음 확인해요."),13,MUTED,false));gap(body,10);
         safety=text("",14,GREEN,true);body.addView(safety);gap(body,10);
-        if(loading){ProgressBar progress=new ProgressBar(activity);body.addView(progress,size(42,42));gap(body,12);body.addView(text("목적지 주변의 공개 사진과 분석 결과를 불러오고 있어요…",17,INK,true));gap(body,20);}
-        if(!error.isEmpty()){body.addView(text(error,17,INK,true));gap(body,12);body.addView(text("다시 불러오거나, 사진 없이 빠른 길을 조회할 수 있어요.",14,MUTED,false));}
+        if(loading){ProgressBar progress=new ProgressBar(activity);body.addView(progress,size(42,42));gap(body,12);body.addView(text((regionMode?"이 지역":"목적지 주변")+"의 공개 사진과 분석 결과를 불러오고 있어요…",17,INK,true));gap(body,20);}
+        if(!error.isEmpty()){body.addView(text(error,17,INK,true));gap(body,12);body.addView(text(regionMode?"다시 불러오거나 지역 중심으로 가는 길을 조회할 수 있어요.":"다시 불러오거나, 사진 없이 빠른 길을 조회할 수 있어요.",14,MUTED,false));}
         if(collection!=null&&!loading){
-            body.addView(text("vision".equals(collection.rankingMode)?"OpenAI · 사진 시각 분석":"목적지 가까운 순 · AI 사진 분석 미사용",16,GREEN,true));gap(body,6);
+            body.addView(text("vision".equals(collection.rankingMode)?"OpenAI · 사진 시각 분석":(regionMode?"지역 중심":"목적지")+" 가까운 순 · AI 사진 분석 미사용",16,GREEN,true));gap(body,6);
             body.addView(text(collection.rankingMessage,14,MUTED,false));
             if(!collection.message.isEmpty()){gap(body,6);body.addView(text(collection.message,14,MUTED,false));}gap(body,16);
-            if(collection.photos.isEmpty()){body.addView(text("이 범위에서 사용할 수 있는 풍경 사진이 없어요.",21,INK,true));gap(body,10);body.addView(text("탐색 범위를 넓히거나 사진 없이 빠른 길을 조회해 보세요.",15,MUTED,false));}
+            if(collection.photos.isEmpty()){body.addView(text("이 범위에서 사용할 수 있는 풍경 사진이 없어요.",21,INK,true));gap(body,10);body.addView(text(regionMode?"탐색 범위를 넓히거나 다른 드라이브 지역을 골라보세요.":"탐색 범위를 넓히거나 사진 없이 빠른 길을 조회해 보세요.",15,MUTED,false));}
             else for(int index=0;index<collection.photos.size();){
                 LinearLayout line=wide?row():column();line.setGravity(Gravity.TOP);
                 for(int col=0;col<(wide?2:1)&&index<collection.photos.size();col++,index++){
@@ -139,14 +142,14 @@ public final class DestinationPhotoView {
         LinearLayout card=column();card.setPadding(dp(16),dp(16),dp(16),dp(18));card.setBackground(background(0xffffffff,LINE));
         card.addView(photoFrame(photo,wide?235:230),size(-1,wide?235:230));gap(card,14);
         card.addView(text(photo.place.name,23,INK,true));gap(card,7);
-        card.addView(text(String.format(Locale.KOREA,"목적지에서 직선 %.1fkm",photo.distanceMeters/1000),14,GREEN,true));
+        card.addView(text(String.format(Locale.KOREA,(regionMode?"지역 중심":"목적지")+"에서 직선 %.1fkm",photo.distanceMeters/1000),14,GREEN,true));
         if(!photo.place.address.isEmpty()){gap(card,5);card.addView(text(photo.place.address,13,MUTED,false));}gap(card,12);
         card.addView(text(photo.visualScore==null?"거리 기반 안내":"OpenAI 사진 분석 · "+photo.visualScore.intValue()+"/100",13,GREEN,true));gap(card,6);
         card.addView(text(photo.reason,15,INK,false));gap(card,10);
         card.addView(text("장소 위치는 사진 촬영 지점과 다를 수 있어요. 촬영 방향·시기와 실제 차창 조망은 미확인입니다.",12,MUTED,false));gap(card,7);
         card.addView(text(photo.sourceName+" · "+photo.license,12,MUTED,false));gap(card,12);
         card.addView(button("원본 사진 · 출처 보기",false,()->showSource(photo)),size(-1,-2));gap(card,8);
-        card.addView(button("이 풍경을 경유지로",true,()->choose(photo)),size(-1,-2));return card;
+        card.addView(button(regionMode?"이 풍경 보러 가기":"이 풍경을 경유지로",true,()->choose(photo)),size(-1,-2));return card;
     }
 
     private View photoFrame(ScenicPhotoCollection.Photo photo,int height){
@@ -158,10 +161,13 @@ public final class DestinationPhotoView {
 
     /** A small selected-place summary; it never starts a new request while the browser is paused. */
     public View createSelectionPreview(ScenicPhotoCollection.Photo photo){
+        return createSelectionPreview(photo,false);
+    }
+    public View createSelectionPreview(ScenicPhotoCollection.Photo photo,boolean regionMode){
         LinearLayout preview=row();preview.setPadding(dp(14),dp(14),dp(14),dp(14));preview.setBackground(background(SOFT,0));
         Bitmap bitmap=cache.get(photo.thumbnailUrl);if(bitmap!=null){ImageView image=new ImageView(activity);image.setScaleType(ImageView.ScaleType.CENTER_CROP);image.setImageBitmap(bitmap);image.setContentDescription(photo.place.name+" 선택한 공개 사진");preview.addView(image,size(138,92));space(preview,14);}
-        LinearLayout copy=column();copy.addView(text("선택한 풍경 · "+photo.place.name,17,GREEN,true));gap(copy,5);
-        copy.addView(text(bitmap==null?"사진 미리보기 없음 · 선택한 장소 기준으로 경로를 확인해요.":"최종 목적지는 유지하고 이 장소를 경유해요.",13,MUTED,false));gap(copy,5);
+        LinearLayout copy=column();copy.addView(text((regionMode?"풍경 목적지 · ":"선택한 풍경 · ")+photo.place.name,17,GREEN,true));gap(copy,5);
+        copy.addView(text(bitmap==null?"사진 미리보기 없음 · 선택한 장소 기준으로 경로를 확인해요.":regionMode?"이 관광 장소가 이번 드라이브의 목적지예요. 정확한 촬영 지점은 미확인입니다.":"최종 목적지는 유지하고 이 장소를 경유해요.",13,MUTED,false));gap(copy,5);
         copy.addView(text(photo.sourceName+" · "+photo.license,11,MUTED,false));preview.addView(copy,new LinearLayout.LayoutParams(0,-2,1));return preview;
     }
 
@@ -169,7 +175,7 @@ public final class DestinationPhotoView {
         if(!allowed()||loading)return;
         if(cache.get(photo.thumbnailUrl)==null){
             dialog=new AlertDialog.Builder(activity).setTitle("사진을 아직 확인하지 못했어요")
-                    .setMessage(photo.place.name+"의 장소 좌표를 경유지로 선택할 수 있어요. 실제 풍경은 사진으로 확인하지 못한 상태입니다.")
+                    .setMessage(photo.place.name+(regionMode?"의 관광 장소를 목적지로 선택할 수 있어요.":"의 장소 좌표를 경유지로 선택할 수 있어요.")+" 실제 풍경은 사진으로 확인하지 못한 상태입니다.")
                     .setPositiveButton("장소 기준으로 선택",(d,w)->{if(allowed())host.onPhotoSelected(photo);})
                     .setNegativeButton("취소",null).show();
         }else host.onPhotoSelected(photo);

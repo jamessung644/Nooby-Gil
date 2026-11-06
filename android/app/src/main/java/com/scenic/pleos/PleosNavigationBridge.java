@@ -98,7 +98,9 @@ public final class PleosNavigationBridge {
                     completeIfConfirmed();
                 });}
                 @Override public void onError(NaviErrorCode error){main.post(()->{if(current(token)&&sent)finish(errorMessage(error));});}
-                @Override public void onRouteCancelled(){main.post(()->{if(current(token)&&sent)finish("순정 내비의 경로 탐색이 취소됐어요.");});}
+                // Replacing an existing route emits an uncorrelated cancellation before the new route starts.
+                // Wait for this request's route events/readback; never treat that old cancellation as success.
+                @Override public void onRouteCancelled(){main.post(()->{if(current(token)&&sent&&sawRouteEvent)finish("순정 내비의 경로 탐색이 취소됐어요.");});}
             };
             helper.initialize(()->{main.post(()->connected(token));return Unit.INSTANCE;},error->{main.post(()->{
                 if(current(token))finish("순정 내비 서비스에 연결하지 못했어요. Pleos 내비 앱과 SDK 버전을 확인해 주세요.");

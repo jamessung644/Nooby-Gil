@@ -70,6 +70,14 @@ public final class ScenicApiClient {
     /** The server-issued selection is bound to this exact destination and scenic place. */
     public JSONObject destinationRoutes(double originLat,double originLon,DestinationPlace destination,
                                        int extraMinutes,String theme,String scenicSelection)throws ApiException {
+        return destinationRoutes(originLat,originLon,destination,extraMinutes,theme,scenicSelection,false);
+    }
+    public JSONObject photoDestinationRoutes(double originLat,double originLon,DestinationPlace region,String theme,String selection)throws ApiException {
+        if(selection==null)throw new ApiException("방문할 풍경 사진을 먼저 선택해 주세요.");
+        return destinationRoutes(originLat,originLon,region,0,theme,selection,true);
+    }
+    private JSONObject destinationRoutes(double originLat,double originLon,DestinationPlace destination,
+                                       int extraMinutes,String theme,String scenicSelection,boolean photoDestination)throws ApiException {
         if(!CourseEngine.inKorea(originLat,originLon)||CourseEngine.unsupportedIslandOrigin(originLat,originLon))
             throw new ApiException("국내에서 자동차로 이동할 출발 위치를 확인해 주세요.");
         if(destination==null)throw new ApiException("도착할 목적지를 먼저 선택해 주세요.");
@@ -82,6 +90,7 @@ public final class ScenicApiClient {
                             .put("lat",destination.lat).put("lon",destination.lon))
                     .put("extraMinutes",extraMinutes).put("theme",theme);
             if(scenicSelection!=null)body.put("scenicSelection",scenicSelection);
+            if(photoDestination)body.put("mode","photo-destination");
             return request("POST","/api/destination-routes",body,70000);
         }catch(JSONException e){throw new ApiException("목적지 경로 요청을 만들지 못했습니다. 조건을 다시 확인해 주세요.");}
     }

@@ -95,6 +95,24 @@ public final class DestinationRoutePlan {
         return new DestinationRoutePlan(expected,originLat,originLon,extraMinutes,theme,status,message,routes);
     }
 
+    /** A region is the photo search area, while the selected photo place is the actual destination. */
+    public static DestinationRoutePlan parsePhotoDestination(JSONObject response,DestinationPlace region,DestinationPlace photo,
+                                            double originLat,double originLon,String theme)throws JSONException {
+        if(response==null||region==null||photo==null||!CourseEngine.inKorea(originLat,originLon)||!validTheme(theme))throw invalid();
+        if(!"photo-destination".equals(response.getString("mode"))||!"ok".equals(response.getString("scenicStatus")))throw invalid();
+        DestinationPlace requested=DestinationPlace.read(response.getJSONObject("requestedDestination"),region.source);
+        DestinationPlace actual=DestinationPlace.read(response.getJSONObject("destination"),photo.source);
+        if(!samePlace(requested,region)||!samePlace(actual,photo))throw invalid();
+        JSONObject origin=response.getJSONObject("origin");
+        if(!same(number(origin,"lat",33,38.65),originLat)||!same(number(origin,"lon",124.5,131.95),originLon))throw invalid();
+        JSONArray raw=response.getJSONArray("routes");if(raw.length()!=1)throw invalid();
+        Route route=parseRoute(raw.getJSONObject(0),"fast",photo,originLat,originLon,theme,null);
+        double[] arrival=route.coordinates[route.coordinates.length-1];
+        if(CourseEngine.distanceMeters(photo.lat,photo.lon,arrival[0],arrival[1])>150.000001)throw invalid();
+        List<Route> routes=new ArrayList<>();routes.add(route);
+        return new DestinationRoutePlan(photo,originLat,originLon,0,theme,"ok",text(response,"message",500),routes);
+    }
+    private static boolean samePlace(DestinationPlace a,DestinationPlace b){return a.id.equals(b.id)&&a.name.equals(b.name)&&same(a.lat,b.lat)&&same(a.lon,b.lon);}
     private static Route parseRoute(JSONObject object,String expectedId,DestinationPlace destination,
                                     double originLat,double originLon,String theme,DestinationPlace expectedScenicPlace)throws JSONException {
         String id=text(object,"id",20),title=text(object,"title",120),reason=text(object,"reason",500);

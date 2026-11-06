@@ -190,6 +190,11 @@ public final class DestinationRoutesTest {
         check(selectedBody.length()==5&&selectedBody.getString("scenicSelection").equals(token),"Pass server selection token unchanged");
         check(selectedBody.getJSONObject("destination").getString("id").equals(publicPlace.id)&&!selectedBody.has("waypoints"),"Photo choice never overwrites final destination or sends arbitrary waypoints");
         rejectRequest(()->client.destinationRoutes(LAT,LON,publicPlace,30,"coast","invalid"),"Reject malformed scenic token before network");
+        Connection regionalRequest=enqueue("{}");client.photoDestinationRoutes(LAT,LON,publicPlace,"coast",token);
+        JSONObject regionalBody=new JSONObject(new String(regionalRequest.output.toByteArray(),StandardCharsets.UTF_8));
+        check(regionalBody.getString("mode").equals("photo-destination")&&regionalBody.getString("scenicSelection").equals(token),"Explicit photo destination mode with original signed selection");
+        check(regionalBody.getJSONObject("destination").getString("id").equals(publicPlace.id)&&regionalBody.getInt("extraMinutes")==0,"Retain region for token binding without detour budget");
+        rejectRequest(()->client.photoDestinationRoutes(LAT,LON,publicPlace,"coast",null),"No photo destination without selected image");
         Connection photos=enqueue("{}");client.scenicPhotos(publicPlace,10000);
         JSONObject photoBody=new JSONObject(new String(photos.output.toByteArray(),StandardCharsets.UTF_8));
         check(photos.getURL().getPath().equals("/api/scenic-photos")&&photos.getRequestMethod().equals("POST"),"Explicit destination photo endpoint");
