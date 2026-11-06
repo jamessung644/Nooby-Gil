@@ -53,6 +53,7 @@ public final class DestinationPhotoView {
     private final List<Future<?>> imageJobs=new ArrayList<>();
     private final Set<HttpURLConnection> connections=Collections.synchronizedSet(new HashSet<HttpURLConnection>());
     private final Set<String> failedImages=new HashSet<>();
+    private final Set<String> displayedImages=new HashSet<>();
     private final Map<String,List<ImageTarget>> waitingImages=new HashMap<>();
     private final LruCache<String,Bitmap> cache=new LruCache<String,Bitmap>(12*1024*1024){protected int sizeOf(String key,Bitmap bitmap){return bitmap.getAllocationByteCount();}};
     private DestinationPlace destination;
@@ -103,7 +104,7 @@ public final class DestinationPhotoView {
     }
 
     private void render(){
-        if(body==null||destroyed)return;body.removeAllViews();controls.clear();
+        if(body==null||destroyed)return;body.removeAllViews();controls.clear();displayedImages.clear();
         body.addView(text(regionMode?"01 지역  →  02 풍경  →  03 맛집·주차":"DESTINATION · SCENIC PHOTOS",12,GREEN,true));gap(body,10);
         body.addView(text(destination.name+(regionMode?"에서 가보고 싶은 풍경":" 근처, 마음에 드는 풍경"),wide?30:25,INK,true));gap(body,10);
         LinearLayout fixed=column();fixed.setPadding(dp(18),dp(15),dp(18),dp(15));fixed.setBackground(background(SOFT,0));
@@ -156,7 +157,7 @@ public final class DestinationPhotoView {
         FrameLayout frame=new FrameLayout(activity);frame.setBackground(background(SOFT,0));frame.setClipToOutline(true);
         ImageView image=new ImageView(activity);image.setScaleType(ImageView.ScaleType.CENTER_CROP);image.setContentDescription(photo.place.name+" 공개 장소 사진");frame.addView(image,new FrameLayout.LayoutParams(-1,-1));
         TextView state=text("사진을 불러오는 중…",14,MUTED,true);state.setGravity(Gravity.CENTER);state.setPadding(dp(16),dp(12),dp(16),dp(12));frame.addView(state,new FrameLayout.LayoutParams(-1,-1));
-        requestImage(photo.thumbnailUrl,new ImageTarget(image,state));return frame;
+        requestImage(photo.imageUrl,photo.thumbnailUrl,new ImageTarget(image,state));return frame;
     }
 
     /** A small selected-place summary; it never starts a new request while the browser is paused. */
@@ -165,7 +166,7 @@ public final class DestinationPhotoView {
     }
     public View createSelectionPreview(ScenicPhotoCollection.Photo photo,boolean regionMode){
         LinearLayout preview=row();preview.setPadding(dp(14),dp(14),dp(14),dp(14));preview.setBackground(background(SOFT,0));
-        Bitmap bitmap=cache.get(photo.thumbnailUrl);if(bitmap!=null){ImageView image=new ImageView(activity);image.setScaleType(ImageView.ScaleType.CENTER_CROP);image.setImageBitmap(bitmap);image.setContentDescription(photo.place.name+" 선택한 공개 사진");preview.addView(image,size(138,92));space(preview,14);}
+        Bitmap bitmap=cache.get(photo.imageUrl);if(bitmap!=null){ImageView image=new ImageView(activity);image.setScaleType(ImageView.ScaleType.CENTER_CROP);image.setImageBitmap(bitmap);image.setContentDescription(photo.place.name+" 선택한 공개 사진");preview.addView(image,size(138,92));space(preview,14);}
         LinearLayout copy=column();copy.addView(text((regionMode?"풍경 목적지 · ":"선택한 풍경 · ")+photo.place.name,17,GREEN,true));gap(copy,5);
         copy.addView(text(bitmap==null?"사진 미리보기 없음 · 선택한 장소 기준으로 경로를 확인해요.":regionMode?"이 관광 장소가 이번 드라이브의 목적지예요. 정확한 촬영 지점은 미확인입니다.":"최종 목적지는 유지하고 이 장소를 경유해요.",13,MUTED,false));gap(copy,5);
         copy.addView(text(photo.sourceName+" · "+photo.license,11,MUTED,false));preview.addView(copy,new LinearLayout.LayoutParams(0,-2,1));return preview;
@@ -173,7 +174,7 @@ public final class DestinationPhotoView {
 
     private void choose(ScenicPhotoCollection.Photo photo){
         if(!allowed()||loading)return;
-        if(cache.get(photo.thumbnailUrl)==null){
+        if(!displayedImages.contains(photo.imageUrl)){
             dialog=new AlertDialog.Builder(activity).setTitle("사진을 아직 확인하지 못했어요")
                     .setMessage(photo.place.name+(regionMode?"의 관광 장소를 목적지로 선택할 수 있어요.":"의 장소 좌표를 경유지로 선택할 수 있어요.")+" 실제 풍경은 사진으로 확인하지 못한 상태입니다.")
                     .setPositiveButton("장소 기준으로 선택",(d,w)->{if(allowed())host.onPhotoSelected(photo);})
@@ -191,16 +192,20 @@ public final class DestinationPhotoView {
     private void openExternal(String url){if(!allowed())return;try{activity.startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url)));}catch(Exception unavailable){Toast.makeText(activity,"링크를 열 수 있는 앱이 없어요.",Toast.LENGTH_SHORT).show();}}
 
     private static final class ImageTarget {final ImageView image;final TextView state;ImageTarget(ImageView image,TextView state){this.image=image;this.state=state;}}
-    private void requestImage(String url,ImageTarget target){
-        Bitmap existing=cache.get(url);if(existing!=null){target.image.setImageBitmap(existing);target.state.setVisibility(View.GONE);return;}
+    private void requestImage(String url,String thumbnail,ImageTarget target){
+        Bitmap existing=cache.get(url);if(existing!=null){target.image.setImageBitmap(existing);target.state.setVisibility(View.GONE);displayedImages.add(url);return;}
         if(!allowed()){target.state.setText("정차 후 사진을 다시 불러와 주세요.");return;}
         if(failedImages.contains(url)){target.state.setText("사진을 불러오지 못했어요.\n장소 정보는 확인할 수 있어요.");return;}
         List<ImageTarget> targets=waitingImages.get(url);if(targets!=null){targets.add(target);return;}
         targets=new ArrayList<>();targets.add(target);waitingImages.put(url,targets);final int token=generation;
-        imageJobs.add(images.submit(()->{Bitmap loaded=null;try{loaded=downloadImage(url);}catch(Exception ignored){}final Bitmap result=loaded;
+        imageJobs.add(images.submit(()->{Bitmap loaded=null;try{loaded=downloadImage(url);}catch(Exception ignored){}
+            // Large in-car cards use the original image, decoded to a bounded size.
+            // A same-photo thumbnail remains useful when the original exceeds the transfer limit.
+            if(loaded==null&&!Thread.currentThread().isInterrupted()&&!url.equals(thumbnail))try{loaded=downloadImage(thumbnail);}catch(Exception ignored){}
+            final Bitmap result=loaded;
             main.post(()->{if(!current(token)){if(result!=null)result.recycle();return;}List<ImageTarget> waiting=waitingImages.remove(url);
                 if(result!=null)cache.put(url,result);else failedImages.add(url);
-                if(waiting!=null)for(ImageTarget item:waiting){if(result!=null){item.image.setImageBitmap(result);item.state.setVisibility(View.GONE);}else item.state.setText("사진을 불러오지 못했어요.\n장소 정보는 확인할 수 있어요.");}
+                if(waiting!=null)for(ImageTarget item:waiting){if(result!=null){item.image.setImageBitmap(result);item.state.setVisibility(View.GONE);displayedImages.add(url);}else item.state.setText("사진을 불러오지 못했어요.\n장소 정보는 확인할 수 있어요.");}
             });
         }));
     }
