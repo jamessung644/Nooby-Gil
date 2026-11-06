@@ -121,7 +121,7 @@ public final class MainActivity extends Activity implements LocationListener {
     @Override protected void onResume(){super.onResume();resumed=true;handler.post(uiTicker);vehicle.start();if(!demo||mapGpsEnabled)startGps();if(running&&demoDriving)handler.postDelayed(plannerMode?simulator:destinationDemoTicker,plannerMode?14000:7000);render();if(resumeDestinationAfterPermission&&checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED){resumeDestinationAfterPermission=false;requestDestinationRoutes();}}
     @Override protected void onPause(){super.onPause();resumed=false;if(nativeNavigation!=null)nativeNavigation.pause();pauseExperiences();closeMusicWeb();cancelDestinationWork();if(captureDemo!=null)captureDemo.dismiss();handler.removeCallbacks(destinationDemoTicker);invalidateApi(false,false);handler.removeCallbacks(uiTicker);handler.removeCallbacks(simulator);player.pause();stopGps();vehicle.stop();if(kakaoMap!=null)kakaoMap.onPause();dismissActionDialog();if(videoDialog!=null)videoDialog.dismiss();updateStatus();}
     @Override protected void onDestroy(){if(nativeNavigation!=null)nativeNavigation.destroy();pauseExperiences();if(discoveryView!=null)discoveryView.destroy();if(destinationPhotoView!=null)destinationPhotoView.destroy();if(recapExperience!=null)recapExperience.destroy();if(nearbyStops!=null)nearbyStops.destroy();closeMusicWeb();cancelDestinationWork();if(captureDemo!=null)captureDemo.dismiss();apiExecutor.shutdownNow();handler.removeCallbacksAndMessages(null);player.release();vehicle.stop();if(kakaoMap!=null)kakaoMap.release();super.onDestroy();}
-    @Override public void onConfigurationChanged(Configuration config){super.onConfigurationChanged(config);pauseExperiences();closeMusicWeb();if(captureDemo!=null)captureDemo.dismiss();render();if(actionDialog!=null)styleDialog(actionDialog);}
+    @Override public void onConfigurationChanged(Configuration config){super.onConfigurationChanged(config);pauseExperiences();if(captureDemo!=null)captureDemo.dismiss();render();if(actionDialog!=null)styleDialog(actionDialog);}
     private int d(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
     private GradientDrawable bg(int color,int stroke){GradientDrawable b=new GradientDrawable();b.setColor(color);b.setCornerRadius(d(8));if(stroke!=0)b.setStroke(d(1),stroke);return b;}
     private TextView txt(String s,int sp,int color){TextView t=new TextView(this);t.setTypeface(ScenicTypography.font(this,400));t.setText(s);t.setTextSize(Math.max(14,sp)+fontBoost);t.setTextColor(color);t.setFontFeatureSettings("kern");t.setIncludeFontPadding(false);t.setLineSpacing(d(3),1);return t;}
@@ -217,6 +217,7 @@ public final class MainActivity extends Activity implements LocationListener {
         map=null;soundStatus=null;progressView=null;detailView=null;apiStatusView=null;noticeView=null;
         if(isCarUiBlocked())renderDrivingSafety();else if(tab==0)renderRoutes();else if(tab==1)renderSound();else if(tab==3)addExperienceView(discoveryView.createView(wide));else if(tab==4)addExperienceView(recapExperience.createView(wide));else if(tab==5)addExperienceView(nearbyStops.createView(wide));else renderScenicRecords();
         gap(root,10);statusView=txt("",14,MUTED);statusView.setPadding(0,d(6),0,d(6));root.addView(statusView,lp(-1,-2));updateStatus();
+        root.post(()->{if(musicWebDialog!=null)musicWebDialog.relayout();});
     }
     private void renderRoutes(){if(destinationPhotoBrowsing&&!plannerMode){renderDestinationPhotos();return;}if(plannerMode){if(preparedBrowse)renderPreparedRoutes();else renderLiveRoutes();}else renderDestinationRoutes();}
     private void addExperienceView(View view){content.addView(view,wide?new LinearLayout.LayoutParams(-1,-1):lp(-1,windowHeightDp-190));}
@@ -267,7 +268,7 @@ public final class MainActivity extends Activity implements LocationListener {
             public boolean canInteract(){return resumed&&!isDrivingInteractionBlocked();}
             public void capture(String segment){captureDemo.saveDemoCapture("sample_busancoast","부산 해안 자동 기록 시연","청사포",segment);}
             public void sharePreview(boolean enabled){captureDemo.setSharingEnabled(enabled);}
-            public void soundtrack(boolean play){if(play)player.playScene(sceneTrack());else player.pause();}
+            public void soundtrack(boolean play){if(play){closeMusicWeb();player.playScene(sceneTrack());}else player.pause();}
             public void openRecap(){switchExperienceTab(4);}
         });
     }
@@ -483,7 +484,7 @@ public final class MainActivity extends Activity implements LocationListener {
     }
     private void renderSound(){
         MusicContext context=currentMusicContext();String key=musicContextKey(context);
-        if(musicState.select(key)){cancelMusicRecommendation();closeMusicWeb();musicMessage="";}
+        if(musicState.select(key)){cancelMusicRecommendation();musicMessage="";}
         boolean blocked=isDistractingBlocked();musicWasBlocked=blocked;
         if(blocked)cancelMusicRecommendation();else requestMusicRecommendation(context,key);
         MusicPlaylist playlist=musicState.playlist();
@@ -492,7 +493,9 @@ public final class MainActivity extends Activity implements LocationListener {
         else if(blocked){selected.addView(title("정차 후 추천할 수 있습니다",24));gap(selected,12);selected.addView(txt("주행 중에는 차량 미디어 버튼을 사용해 주세요.",16,MUTED));gap(selected,24);}
         else if(musicState.isPending()){selected.addView(title("플레이리스트 추천 중",24));gap(selected,12);gap(selected,8);ProgressBar progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);selected.addView(progress,lp(-1,4));gap(selected,24);}
         else{selected.addView(title("추천을 완료하지 못했습니다",24));gap(selected,12);selected.addView(txt(musicState.error()==null?"다시 시도해 주세요.":musicState.error(),16,MUTED));gap(selected,24);selected.addView(button("음악 추천 다시 시도",true,()->{if(!resumed||isDistractingBlocked())return;cancelMusicRecommendation();musicState.retry();render();}),lp(-1,-2));gap(selected,12);}
-        TextView play=button("노래 재생",true,this::openChosenPlaylist);play.setEnabled(playlist!=null&&!blocked);play.setAlpha(play.isEnabled()?1:.45f);selected.addView(play,lp(-1,-2));if(!musicMessage.isEmpty()&&(playlist!=null||blocked||musicState.isPending())){gap(selected,12);soundStatus=txt(musicMessage,15,MUTED);soundStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);selected.addView(soundStatus);}panelSpace();
+        TextView play=button("노래 재생",true,this::openChosenPlaylist);play.setEnabled(playlist!=null&&!blocked);play.setAlpha(play.isEnabled()?1:.45f);selected.addView(play,lp(-1,-2));
+        gap(selected,8);TextView external= textAction("외부 앱에서 열기  ↗",this::openChosenPlaylistExternally);external.setEnabled(playlist!=null&&!blocked);external.setAlpha(external.isEnabled()?1:.45f);selected.addView(external,lp(-1,-2));
+        if(!musicMessage.isEmpty()&&(playlist!=null||blocked||musicState.isPending())){gap(selected,12);soundStatus=txt(musicMessage,15,MUTED);soundStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);selected.addView(soundStatus);}panelSpace();
         LinearLayout right=section();addScrollableColumn(right,.38f);right.addView(title("추천 기준",20));gap(right,20);right.addView(txt(hasCurrentMusicCourse()?context.title:"선택한 코스 없음",18,INK));gap(right,12);
         String contextLabel=hasCurrentMusicCourse()?(plannerMode?(liveOrigin==null?"준비된 드라이브 코스":liveOrigin.label()):(journey.usesGps()?"현재 위치에서 목적지까지":originLabel())):"선택한 조건";
         right.addView(txt(contextLabel,14,MUTED));gap(right,24);summaryRow(right,"음악 분위기",chosenDestinationRoute!=null&&"fast".equals(chosenDestinationRoute.id)?"일반 드라이브":musicThemeLabel(context.theme));summaryRow(right,"시간",context.durationMinutes+"분");divider(right);gap(right,18);right.addView(title("나의 음악 취향",18));gap(right,10);
@@ -500,25 +503,31 @@ public final class MainActivity extends Activity implements LocationListener {
         for(int i=0;i<tasteIds.length;i++){final String taste=tasteIds[i];right.addView(chip(tasteNames[i],musicTaste.equals(taste),()->{if(isDistractingBlocked())return;musicTaste=taste;getPreferences(0).edit().putString("music_taste",taste).apply();cancelMusicRecommendation();render();}),lp(-1,-2));gap(right,6);}
         right.addView(txt("선택한 취향은 경로 분위기와 함께 AI 추천에 사용합니다.",13,MUTED));gap(right,12);
         Switch autoMusic=new Switch(this);autoMusic.setText("기록 시연 시작 시 분위기 음악 재생");autoMusic.setTextSize(15);autoMusic.setMinHeight(d(56));autoMusic.setChecked(getPreferences(0).getBoolean("scene_autoplay",false));autoMusic.setOnCheckedChangeListener((v,checked)->{if(!isDistractingBlocked())getPreferences(0).edit().putBoolean("scene_autoplay",checked).apply();});right.addView(autoMusic);
-        right.addView(txt("시연용 자체 생성 음악입니다. 외부 음원은 재생 버튼으로 연결합니다.",13,MUTED));gap(right,8);right.addView(button(player.isPlaying()?"분위기 음악 정지":"분위기 음악 미리 듣기",false,()->{if(isDistractingBlocked())return;if(player.isPlaying())player.pause();else player.playScene(sceneTrack());render();}),lp(-1,-2));gap(right,14);right.addView(textAction("이용 안내  ›",()->showInformation("음악 연결 안내","AI가 코스의 풍경과 소요 시간에 맞는 공개 플레이리스트 하나를 추천합니다.\n\n선택한 목록은 YouTube Music 앱, 외부 웹, 내부 웹 화면 순서로 연결합니다. 열린 화면에서 재생 시작이나 로그인이 필요할 수 있어요. 내부 웹에서는 계정 로그인을 지원하지 않습니다.\n\n추천 완료만으로 재생하지 않으며, 정차 중 명시적으로 ‘노래 재생’을 눌러야 열립니다.")),lp(-1,-2));
+        right.addView(txt("시연용 자체 생성 음악입니다. 외부 음원은 재생 버튼으로 연결합니다.",13,MUTED));gap(right,8);right.addView(button(player.isPlaying()?"분위기 음악 정지":"분위기 음악 미리 듣기",false,()->{if(isDistractingBlocked())return;if(player.isPlaying())player.pause();else{closeMusicWeb();player.playScene(sceneTrack());}render();}),lp(-1,-2));gap(right,14);right.addView(textAction("이용 안내  ›",()->showInformation("음악 연결 안내","AI가 코스의 풍경과 소요 시간에 맞는 공개 플레이리스트 하나를 추천합니다.\n\n‘노래 재생’은 SCENIC 안에서 공식 음악 웹사이트를 엽니다. 재생을 시작한 뒤 ‘작게 보기’를 누르면 같은 플레이어를 작은 창으로 유지하며 경로를 볼 수 있습니다. ‘재생 종료’를 누르면 플레이어를 닫습니다.\n\n로그인은 ‘외부 앱에서 열기’를 이용해 주세요. 작은 창은 SCENIC 안에서 사용하며, 앱을 나가거나 차량 조작이 제한되면 종료됩니다. 실제 재생 가능 여부는 YouTube의 계정·지역·웹 재생 정책에 따라 달라질 수 있습니다.")),lp(-1,-2));
     }
-    private void openChosenPlaylist(){
+    private void openChosenPlaylist(){openChosenPlaylist(false);}
+    private void openChosenPlaylistExternally(){openChosenPlaylist(true);}
+    private void openChosenPlaylist(boolean external){
         if(!resumed||tab!=1||isDistractingBlocked()){toast("음악 화면은 정차 후 열어 주세요.");return;}
         MusicContext context=currentMusicContext();
         if(musicState.select(musicContextKey(context))){cancelMusicRecommendation();render();return;}
         MusicPlaylist playlist=musicState.playlist();if(playlist==null){toast("AI 음악 추천이 준비될 때까지 기다려 주세요.");return;}
         player.pause();
-        YouTubeMusicLauncher.Result result=YouTubeMusicLauncher.openPlaylist(this,playlist.url);
-        if(result==YouTubeMusicLauncher.Result.UNAVAILABLE){
-            closeMusicWeb();
-            try{
-                musicWebDialog=new MusicWebDialog(this,playlist.url,()->{musicWebDialog=null;if(resumed)updateStatus();});
-                musicWebDialog.show();
-                musicMessage="선택한 플레이리스트를 SCENIC 음악 웹 화면에서 열었습니다.";
-            }catch(RuntimeException unavailable){
-                closeMusicWeb();musicMessage="음악 웹 화면을 시작하지 못했습니다. 기기의 Android System WebView를 확인해 주세요.";toast(musicMessage);
-            }
-        }else musicMessage="선택한 플레이리스트를 "+(result==YouTubeMusicLauncher.Result.APP?"YouTube Music 앱":"음악 웹 화면")+"에서 열었습니다. 열린 화면에서 재생해 주세요.";
+        if(!external&&musicWebDialog!=null&&musicWebDialog.matchesPlaylist(playlist.url)){
+            musicWebDialog.expand();musicMessage="열려 있던 음악 플레이어를 크게 표시했습니다.";updateStatus();return;
+        }
+        closeMusicWeb();
+        if(external){
+            YouTubeMusicLauncher.Result result=YouTubeMusicLauncher.openPlaylist(this,playlist.url);
+            if(result!=YouTubeMusicLauncher.Result.UNAVAILABLE){musicMessage="선택한 플레이리스트를 외부 음악 화면에서 열었습니다.";updateStatus();return;}
+        }
+        try{
+            musicWebDialog=new MusicWebDialog(this,playlist.url,()->{musicWebDialog=null;musicMessage="음악 플레이어를 종료했습니다.";if(resumed)updateStatus();});
+            musicWebDialog.show();
+            musicMessage="재생 후 ‘작게 보기’를 누르면 경로 화면과 함께 볼 수 있어요.";
+        }catch(RuntimeException unavailable){
+            closeMusicWeb();musicMessage="음악 웹 화면을 시작하지 못했습니다. 기기의 Android System WebView를 확인해 주세요.";toast(musicMessage);
+        }
         updateStatus();
     }
     private void closeMusicWeb(){
@@ -701,7 +710,7 @@ public final class MainActivity extends Activity implements LocationListener {
         boolean blocked=isDistractingBlocked();
         if(blocked)cancelMusicRecommendation();
         if(blocked!=musicWasBlocked){render();return;}
-        if(musicState.select(musicContextKey(currentMusicContext()))){cancelMusicRecommendation();closeMusicWeb();render();}
+        if(musicState.select(musicContextKey(currentMusicContext()))){cancelMusicRecommendation();render();}
     }
     private void enforceVideoSafety(){if(isDistractingBlocked()&&musicWebDialog!=null){closeMusicWeb();musicMessage="주행 상태로 바뀌어 음악 웹 화면을 닫았습니다.";toast(musicMessage);}boolean cancelledLive=isDrivingInteractionBlocked()&&apiRequests.isPending(ApiRequestGate.AI);if(isDrivingInteractionBlocked())invalidateApi(false,false);if(cancelledLive&&resumed){liveMessage="주행 상태로 바뀌어 코스 생성을 취소했습니다. 정차 후 다시 요청해 주세요.";render();}if(((isDrivingInteractionBlocked()&&!actionDialogForConnection)||running||demoDriving||knownGpsMoving()||(vehicleSpeed!=null&&vehicleSpeed>0.1f))&&actionDialog!=null)dismissActionDialog();if(isDistractingBlocked()&&videoDialog!=null){if(videoView!=null)videoView.stopPlayback();videoDialog.dismiss();videoDialog=null;toast("주행 상태에서 영상 재생을 중단했습니다.");}if(isDistractingBlocked()&&tab>=2&&(tab!=5||isDrivingInteractionBlocked())){pauseExperiences();if(running||demoDriving||knownGpsMoving()||(vehicleSpeed!=null&&vehicleSpeed>0.1f)){tab=0;render();}}}
     private void playVideo(JSONObject m){if(isDistractingBlocked()){toast("영상은 정차 상태에서만 재생할 수 있습니다.");return;}player.pause();videoView=new VideoView(this);videoView.setVideoURI(Uri.parse(m.optString("uri")));MediaController controls=new MediaController(this);videoView.setMediaController(controls);videoView.setOnErrorListener((mp,what,extra)->{toast("원본 파일에 접근할 수 없습니다. 다시 가져와 주세요.");if(videoDialog!=null)videoDialog.dismiss();return true;});videoView.setOnPreparedListener(mp->{if(isDistractingBlocked()){enforceVideoSafety();return;}videoView.start();});videoDialog=new AlertDialog.Builder(this).setTitle(m.optString("title")).setView(videoView).setNegativeButton("닫기",null).create();videoDialog.setOnDismissListener(dlg->{if(videoView!=null)videoView.stopPlayback();videoDialog=null;});videoDialog.show();styleDialog(videoDialog);if(videoDialog.getWindow()!=null)videoDialog.getWindow().setLayout(d(Math.min(800,windowWidthDp-48)),d(Math.min(460,windowHeightDp-64)));}

@@ -91,7 +91,7 @@ async function testFiles(directory) {
 const domainClasses = [
   'ApiRequestGate', 'CourseEngine', 'DestinationPlace', 'DestinationRoutePlan',
   'EndpointPolicy', 'DriveRegion', 'JourneyState', 'LivePlan', 'LivePlanOrigin', 'LocationFixPolicy',
-  'MusicContext', 'MusicPlaylist', 'MusicRecommendationState', 'NationwideCatalog',
+  'MusicContext', 'MusicPlaylist', 'MusicRecommendationState', 'MusicWebPolicy', 'MusicWindowLayout', 'NationwideCatalog',
   'NavigationHandoffPlan', 'ParkingEvidenceStore', 'PersonalVideoStore', 'RouteProjection',
   'ScenicApiClient', 'ScenicCaptureStore', 'ScenicEvidence', 'ScenicLayoutPolicy', 'ScenicPhotoCollection',
   'StrictJson', 'VehicleSafety',
@@ -100,6 +100,7 @@ const sourceDirectory = join(root, 'android', 'app', 'src', 'main', 'java', 'com
 const tests = (await Promise.all([
   testFiles(join(root, 'android', 'tests')),
   testFiles(join(root, 'tests', 'api-client')),
+  testFiles(join(root, 'tests', 'music-web')),
   testFiles(join(root, 'android', 'app', 'src', 'test', 'java')),
 ])).flat().sort();
 if (!tests.length) throw new Error('No Java tests were discovered.');
