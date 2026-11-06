@@ -64,18 +64,37 @@ public final class ScenicApiClient {
     /** Call only for a user-chosen origin, including an explicitly labeled public example. */
     public JSONObject destinationRoutes(double originLat,double originLon,DestinationPlace destination,
                                        int extraMinutes,String theme)throws ApiException {
+        return destinationRoutes(originLat,originLon,destination,extraMinutes,theme,null);
+    }
+
+    /** The server-issued selection is bound to this exact destination and scenic place. */
+    public JSONObject destinationRoutes(double originLat,double originLon,DestinationPlace destination,
+                                       int extraMinutes,String theme,String scenicSelection)throws ApiException {
         if(!CourseEngine.inKorea(originLat,originLon)||CourseEngine.unsupportedIslandOrigin(originLat,originLon))
             throw new ApiException("국내에서 자동차로 이동할 출발 위치를 확인해 주세요.");
         if(destination==null)throw new ApiException("도착할 목적지를 먼저 선택해 주세요.");
         if(extraMinutes<0||extraMinutes>120)throw new ApiException("풍경 길에 더 쓸 시간은 0~120분으로 선택해 주세요.");
         if(!DestinationRoutePlan.validTheme(theme))throw new ApiException("전체, 바다, 숲길, 산길, 호수·강변, 시골길, 도심 중 풍경을 선택해 주세요.");
+        if(scenicSelection!=null&&!ScenicPhotoCollection.validSelectionToken(scenicSelection))throw new ApiException("사진 선택이 유효하지 않아요. 목적지 주변 사진을 새로 불러와 주세요.");
         try{
             JSONObject body=new JSONObject().put("origin",new JSONObject().put("lat",originLat).put("lon",originLon))
                     .put("destination",new JSONObject().put("id",destination.id).put("name",destination.name)
                             .put("lat",destination.lat).put("lon",destination.lon))
                     .put("extraMinutes",extraMinutes).put("theme",theme);
+            if(scenicSelection!=null)body.put("scenicSelection",scenicSelection);
             return request("POST","/api/destination-routes",body,70000);
         }catch(JSONException e){throw new ApiException("목적지 경로 요청을 만들지 못했습니다. 조건을 다시 확인해 주세요.");}
+    }
+
+    /** Requests public photos around a chosen destination; never sends current GPS. */
+    public JSONObject scenicPhotos(DestinationPlace destination,int radiusMeters)throws ApiException {
+        if(destination==null)throw new ApiException("사진을 찾아볼 목적지를 먼저 선택해 주세요.");
+        if(!ScenicPhotoCollection.validRadius(radiusMeters))throw new ApiException("사진 탐색 범위를 5·10·20km 중에서 선택해 주세요.");
+        try{return request("POST","/api/scenic-photos",new JSONObject()
+                .put("destination",new JSONObject().put("id",destination.id).put("name",destination.name)
+                        .put("address",destination.address).put("lat",destination.lat).put("lon",destination.lon))
+                .put("radiusMeters",radiusMeters),90000);
+        }catch(JSONException error){throw new ApiException("사진 검색 요청을 만들지 못했어요. 목적지를 다시 확인해 주세요.");}
     }
 
     /** AI chooses an actual playlist; this request contains no GPS or route-stop coordinates. */
@@ -258,6 +277,7 @@ public final class ScenicApiClient {
         if (status == 504) return new ApiException("서비스 응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.");
         if (status == 401 || status == 403) return new ApiException("서버 연결 권한을 확인해 주세요.");
         if (status == 404) return new ApiException("서버에서 앱 API를 찾지 못했습니다. 서버 버전과 주소를 확인해 주세요.");
+        if (status == 409) return new ApiException("사진 선택이 만료되었거나 목적지가 바뀌었어요. 목적지 주변 사진을 새로 불러와 다시 선택해 주세요.");
         if (status == 400) return new ApiException("선택한 조건으로 요청을 처리할 수 없습니다. 시간이나 코스를 바꿔 주세요.");
         return new ApiException("서비스 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.");
     }

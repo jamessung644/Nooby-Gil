@@ -71,6 +71,11 @@ public final class DestinationRoutePlan {
 
     public static DestinationRoutePlan parse(JSONObject response,DestinationPlace expected,double originLat,
                                             double originLon,int extraMinutes,String theme)throws JSONException {
+        return parse(response,expected,originLat,originLon,extraMinutes,theme,null);
+    }
+    /** A selected photograph must route through that exact POI, without substitution. */
+    public static DestinationRoutePlan parse(JSONObject response,DestinationPlace expected,double originLat,
+                                            double originLon,int extraMinutes,String theme,DestinationPlace expectedScenicPlace)throws JSONException {
         if(response==null||expected==null||!CourseEngine.inKorea(originLat,originLon)
                 ||extraMinutes<0||extraMinutes>120||!validTheme(theme))throw invalid();
         JSONObject origin=response.getJSONObject("origin");
@@ -84,14 +89,14 @@ public final class DestinationRoutePlan {
         if(raw.length()<1||raw.length()>2||("ok".equals(status)!=(raw.length()==2))
                 ||(extraMinutes==0&&!"disabled".equals(status))||("disabled".equals(status)&&extraMinutes!=0))throw invalid();
         List<Route> routes=new ArrayList<>();
-        for(int i=0;i<raw.length();i++)routes.add(parseRoute(raw.getJSONObject(i),i==0?"fast":"scenic",expected,originLat,originLon,theme));
+        for(int i=0;i<raw.length();i++)routes.add(parseRoute(raw.getJSONObject(i),i==0?"fast":"scenic",expected,originLat,originLon,theme,expectedScenicPlace));
         // Provider durations originate as whole seconds. Permit only floating-point roundoff.
         if(routes.size()==2&&routes.get(1).durationMin*60>routes.get(0).durationMin*60+extraMinutes*60+0.000001)throw invalid();
         return new DestinationRoutePlan(expected,originLat,originLon,extraMinutes,theme,status,message,routes);
     }
 
     private static Route parseRoute(JSONObject object,String expectedId,DestinationPlace destination,
-                                    double originLat,double originLon,String theme)throws JSONException {
+                                    double originLat,double originLon,String theme,DestinationPlace expectedScenicPlace)throws JSONException {
         String id=text(object,"id",20),title=text(object,"title",120),reason=text(object,"reason",500);
         if(!expectedId.equals(id)||!ROAD_SOURCE.equals(text(object,"source",40)))throw invalid();
         double distance=number(object,"distanceKm",0,1500),duration=number(object,"durationMin",0,720);
@@ -121,7 +126,9 @@ public final class DestinationRoutePlan {
             String waypointId=text(point,"id",100),waypointSource=text(point,"source",80);
             if(!waypointId.matches("[A-Za-z0-9_-]{1,100}")||!"한국관광공사 TourAPI".equals(waypointSource))throw invalid();
             double lat=number(point,"lat",33,38.65),lon=number(point,"lon",124.5,131.95);
-            if(distanceToRoute(lat,lon,coordinates,originLat)>700.000001)throw invalid();
+            if(expectedScenicPlace!=null&&(!waypointId.equals(expectedScenicPlace.id)||!name.equals(expectedScenicPlace.name)
+                    ||!same(lat,expectedScenicPlace.lat)||!same(lon,expectedScenicPlace.lon)))throw invalid();
+            if(distanceToRoute(lat,lon,coordinates,originLat)>(expectedScenicPlace==null?700.000001:150.000001))throw invalid();
             waypoints.add(new CourseEngine.Spot(name,"풍경 길 통과 지점 · 별도 체류 시간 없음 · "+waypointSource,lat,lon));
         }
         return new Route(id,title,reason,distance,duration,coordinates,labels,waypoints,destination,originLat,originLon,theme);

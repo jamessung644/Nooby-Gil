@@ -18,6 +18,12 @@ public final class JourneyStateTest {
         restored.setOrigin(true,37.567,126.98,"현재 위치");restored.visitParking(parking,food);check(restored.usesGps(),"Parking never silently replaces GPS origin");check(restored.originLat()==37.567,"GPS reference survives stop change");
         restored.selectNearbyAnchor(restored.stops().get(0));check(restored.nearbyAnchor().name.equals("덕수궁")&&restored.restaurant()==null,"User may choose another itinerary search anchor");
         check(JourneyState.restore("bad-json").target()==null,"Malformed persistence fails safely");
+        JourneyState photoTrip=new JourneyState();photoTrip.setOrigin(false,37.5665,126.9780,"서울시청 · 시연 출발지");photoTrip.beginDestination(beach);String photoTripId=photoTrip.id();photoTrip.setScenicWaypoint(food);
+        check(photoTrip.target()==beach&&photoTrip.nearbyAnchor()==beach,"Photo stop never replaces searched destination");
+        check(photoTrip.stops().size()==2&&photoTrip.stops().get(0)==food&&photoTrip.stops().get(1)==beach,"Scenery is visited before destination");
+        check(photoTrip.id().equals(photoTripId)&&photoTrip.originLat()==37.5665,"Photo keeps trip identity and origin");
+        JourneyState photoRestored=JourneyState.restore(photoTrip.serialize());check(photoRestored.stops().get(0).id.equals("food")&&photoRestored.target().id.equals("beach"),"Photo visit and destination survive restart");
+        photoTrip.setScenicWaypoint(null);check(photoTrip.stops().size()==1&&photoTrip.target()==beach,"Removing photo keeps destination");
         System.out.println("JourneyStateTest: "+checks+" checks passed");
     }
 }

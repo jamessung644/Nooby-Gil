@@ -93,7 +93,7 @@ const domainClasses = [
   'EndpointPolicy', 'JourneyState', 'LivePlan', 'LivePlanOrigin', 'LocationFixPolicy',
   'MusicContext', 'MusicPlaylist', 'MusicRecommendationState', 'NationwideCatalog',
   'NavigationHandoffPlan', 'ParkingEvidenceStore', 'PersonalVideoStore', 'RouteProjection',
-  'ScenicApiClient', 'ScenicCaptureStore', 'ScenicEvidence', 'ScenicLayoutPolicy',
+  'ScenicApiClient', 'ScenicCaptureStore', 'ScenicEvidence', 'ScenicLayoutPolicy', 'ScenicPhotoCollection',
   'StrictJson', 'VehicleSafety',
 ];
 const sourceDirectory = join(root, 'android', 'app', 'src', 'main', 'java', 'com', 'scenic', 'pleos');

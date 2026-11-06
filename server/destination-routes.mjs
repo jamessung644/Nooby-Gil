@@ -1,5 +1,6 @@
 import { ApiError, buildKakaoUrl, normalizeKakao } from './providers.mjs';
 import { getPreparedCatalog } from './android-catalog.mjs';
+import { scenicSelectionSigner } from './scenic-photos.mjs';
 
 const SOURCE = 'Kakao Mobility';
 const PLACE_SOURCE = '한국관광공사 TourAPI';
@@ -29,7 +30,7 @@ function distanceMeters(a, b) {
   return 12742000 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
 }
 function validateInput(input) {
-  if (!keysOnly(input, ['origin', 'destination', 'extraMinutes', 'theme'])
+  if (!keysOnly(input, ['origin', 'destination', 'extraMinutes', 'theme', 'scenicSelection'])
     || !keysOnly(input.origin, ['lat', 'lon']) || !domesticCoordinate(input.origin)
     || !keysOnly(input.destination, ['id', 'name', 'address', 'lat', 'lon']) || !domesticCoordinate(input.destination)
     || !safeId(input.destination.id) || !text(input.destination.name, 120)
@@ -42,7 +43,7 @@ function validateInput(input) {
   }
   if (distanceMeters(input.origin, input.destination) < 50) throw new ApiError('출발지와 목적지가 너무 가깝습니다. 다른 목적지를 선택해 주세요.');
   const { id, name, address, lat, lon } = input.destination;
-  return { origin: { ...input.origin }, destination: { id, name, ...(address === undefined ? {} : { address }), lat, lon }, extraMinutes, theme };
+  return { origin: { ...input.origin }, destination: { id, name, ...(address === undefined ? {} : { address }), lat, lon }, extraMinutes, theme, scenicSelection: input.scenicSelection };
 }
 function keyFrom(env) {
   const key = typeof env.KAKAO_REST_API_KEY === 'string' ? env.KAKAO_REST_API_KEY.trim() : '';
@@ -183,17 +184,34 @@ async function roadRoute(origin, destination, waypoint, options) {
     || distanceMeters(destination, point(route.coordinates.at(-1))) > 1000) {
     throw new ApiError('선택한 출발지·목적지에 맞는 도로 경로를 확인하지 못했습니다.', 502);
   }
-  if (waypoint && nearPolyline(waypoint, route.coordinates, origin).distance > 700) return null;
+  if (waypoint && nearPolyline(waypoint, route.coordinates, origin).distance > (options.exactSelection ? 150 : 700)) return null;
   return { ...route, durationSeconds: data.routes[0].summary.duration };
 }
 
-export async function planDestinationRoutes(input, { env = process.env, fetchImpl = fetch, catalog } = {}) {
-  const { origin, destination, extraMinutes, theme } = validateInput(input);
+export async function planDestinationRoutes(input, { env = process.env, fetchImpl = fetch, catalog, selectionSigner = scenicSelectionSigner } = {}) {
+  const { origin, destination, extraMinutes, theme, scenicSelection } = validateInput(input);
+  // Verify before making any provider request. Expired/tampered tokens never
+  // fall back to a different scenic place or to a client-supplied coordinate.
+  const selected = scenicSelection === undefined ? null : selectionSigner.verify(scenicSelection, destination);
   const options = { key: keyFrom(env), fetchImpl, deadline: Date.now() + 50000 };
   const { durationSeconds: baselineSeconds, ...baseline } = await roadRoute(origin, destination, null, options);
   const fast = { ...baseline, id: 'fast', title: '빠른 경로', scenicLabels: [], waypoints: [], reason: '카카오의 시간 우선 옵션으로 조회한 목적지까지의 도로 경로입니다.' };
   const response = (scenicStatus, message, scenic) => ({ origin, destination, routes: scenic ? [fast, scenic] : [fast], scenicStatus, message });
   if (extraMinutes === 0) return response('disabled', '추가 시간이 0분이어서 빠른 경로만 표시합니다.');
+  if (selected) {
+    let route;
+    try { route = await roadRoute(origin, destination, selected, { ...options, exactSelection: true }); }
+    catch { return response('provider_unavailable', '선택한 사진 장소의 도로 정보를 확인하지 못해 빠른 경로만 표시합니다. 다른 장소로 바꾸지 않았어요.'); }
+    if (!route) return response('no_feasible_route', '선택한 사진 장소 150m 이내로 접근하는 도로를 확인하지 못해 빠른 경로만 표시합니다. 다른 장소로 바꾸지 않았어요.');
+    if (route.durationSeconds > baselineSeconds + extraMinutes * 60) return response('no_feasible_route', '선택한 사진 장소를 경유하면 허용한 추가 시간을 넘어 빠른 경로만 표시합니다. 추가 시간을 늘려 다시 비교할 수 있어요.');
+    const { durationSeconds, ...publicRoute } = route;
+    const { id, name, lat, lon, source } = selected;
+    return response('ok', '선택한 사진 장소를 경유한 뒤 원래 목적지로 갑니다. 장소 좌표와 150m 이내 도로 접근을 확인했으며 촬영 지점·차창 조망을 보장하지 않습니다.', {
+      ...publicRoute, id: 'scenic', title: '선택한 사진 경유', scenicLabels: [name],
+      waypoints: [{ id, name, lat, lon, source }],
+      reason: `선택한 ${name} 인근 도로를 경유해 같은 목적지로 갑니다. 사진의 실제 촬영 위치와 차창 조망은 미확인입니다.`,
+    });
+  }
   let candidates;
   try { candidates = selectScenicCandidates({ origin, destination, theme, fast }, catalog); }
   catch { return response('provider_unavailable', '풍경 기초정보를 확인하지 못해 빠른 경로만 표시합니다.'); }
