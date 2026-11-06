@@ -1,6 +1,8 @@
 package com.scenic.pleos;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.SharedPreferences;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.drawable.GradientDrawable;
@@ -17,6 +19,11 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.EditText;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
@@ -27,6 +34,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -37,7 +46,10 @@ public final class NearbyStopsView {
         boolean canInteract();
         String serverBaseUrl();
         DestinationPlace anchor();
-        void navigate(DestinationPlace place);
+        List<DestinationPlace> anchors();
+        DestinationPlace savedRestaurant();
+        void chooseAnchor(DestinationPlace place);
+        void navigate(DestinationPlace place,DestinationPlace restaurant,boolean parking);
     }
     private static final int INK=0xff172925,MUTED=0xff65736e,LINE=0xffdbe3df,PANEL=0xffffffff,SOFT=0xffedf4ef,ACCENT=0xff24745a;
     private final Activity activity;
@@ -54,8 +66,10 @@ public final class NearbyStopsView {
     private boolean restaurantsLoaded,parkingLoaded;
     private DestinationPlace anchor;
     private Place selectedRestaurant;
+    private final ParkingEvidenceStore evidence;
+    private AlertDialog dialog;
 
-    public NearbyStopsView(Activity activity,Host host){this.activity=activity;this.host=host;}
+    public NearbyStopsView(Activity activity,Host host){this.activity=activity;this.host=host;final SharedPreferences prefs=activity.getSharedPreferences("scenic_parking_evidence",0);evidence=new ParkingEvidenceStore(new ParkingEvidenceStore.Persistence(){public String read(){return prefs.getString("observations","{}");}public void write(String value){prefs.edit().putString("observations",value).apply();}});}
 
     public View createView(boolean wide){
         this.wide=wide;active=true;
@@ -66,12 +80,13 @@ public final class NearbyStopsView {
         if(!key.equals(anchorKey)||!nextBase.equals(baseUrl)){
             cancel();anchor=next;anchorKey=key;baseUrl=nextBase;restaurants.clear();parkings.clear();selectedRestaurant=null;
             restaurantsLoaded=false;parkingLoaded=false;error="";pendingKind="restaurant";
+            DestinationPlace saved=host.savedRestaurant();if(saved!=null)selectedRestaurant=new Place(saved,0);
         }
         root=column();render();
         if(anchor!=null&&!baseUrl.isEmpty()&&!restaurantsLoaded&&!loading&&error.isEmpty())handler.post(()->{if(active&&!destroyed&&!loading&&!restaurantsLoaded)load("restaurant");});
         return root;
     }
-    public void pause(){active=false;cancel();}
+    public void pause(){active=false;cancel();if(dialog!=null){dialog.dismiss();dialog=null;}}
     public void destroy(){destroyed=true;pause();executor.shutdownNow();handler.removeCallbacksAndMessages(null);}
 
     private void cancel(){revision++;loading=false;if(job!=null){job.cancel(true);job=null;}HttpURLConnection old=connection;connection=null;if(old!=null)old.disconnect();}
@@ -126,6 +141,7 @@ public final class NearbyStopsView {
         LinearLayout header=row();header.addView(text("한 끼부터 주차까지",28,INK,true),new LinearLayout.LayoutParams(0,-2,1));
         header.addView(badge("Kakao Local · 실제 검색"));root.addView(header,size(-1,-2));gap(root,8);
         root.addView(text(anchor==null?"먼저 경로에서 목적지를 선택해 주세요.":anchor.name+" 주변 3km · 거리순 음식점 · 맛집 평점 순위가 아닙니다",14,MUTED,false));gap(root,18);
+        if(host.anchors().size()>1){root.addView(action("여정의 다른 장소 주변 찾기",false,this::chooseAnchor),size(-1,-2));gap(root,10);}
         if(baseUrl.isEmpty()){root.addView(text("설정에서 API 서버 주소를 확인해 주세요.",17,INK,false));return;}
         if(anchor==null)return;
         LinearLayout columns=new LinearLayout(activity);columns.setOrientation(wide?LinearLayout.HORIZONTAL:LinearLayout.VERTICAL);columns.setGravity(Gravity.TOP);
@@ -149,10 +165,13 @@ public final class NearbyStopsView {
             selection.addView(action("목적지 주변 주차장 먼저 찾기",true,()->load("parking")),size(-1,-2));
         }else{
             selection.addView(text(selectedRestaurant.destination.name,25,INK,true));gap(selection,8);selection.addView(text(selectedRestaurant.destination.address,15,MUTED,false));gap(selection,18);
-            selection.addView(badge("식당 내 주차 · 확인 필요"));gap(selection,8);
-            selection.addView(text("주차 리뷰와 실시간 빈자리는 아직 연결되지 않았어요. 장소 정보에서 확인하거나 가까운 주차장을 찾아보세요.",14,MUTED,false));gap(selection,18);
-            selection.addView(action("이 식당으로 경로 보기",true,()->navigate(selectedRestaurant)),size(-1,-2));gap(selection,8);
-            selection.addView(action("주변 주차장 찾기",false,()->load("parking")),size(-1,-2));gap(selection,8);
+            ParkingEvidenceStore.Evidence observed=evidence.get(selectedRestaurant.destination.id);String decision=observed==null?"unknown":observed.decision(System.currentTimeMillis());
+            selection.addView(badge("식당 자체 주차 · "+("available".equals(decision)?"가능으로 기록":"unavailable".equals(decision)?"불가로 기록":"확인 필요")));gap(selection,8);
+            selection.addView(text(observed==null?"확인된 근거가 없어요. 장소 정보·리뷰 또는 식당에 확인한 내용을 기록할 수 있어요.":observed.source+" · "+new SimpleDateFormat("yyyy.MM.dd HH:mm",Locale.KOREA).format(new Date(observed.checkedAt))+"\n"+observed.note+(observed.recent(System.currentTimeMillis())?"":"\n30일이 지났거나 확인 시점이 유효하지 않아 재확인이 필요해요."),14,MUTED,false));gap(selection,8);
+            selection.addView(text("내가 남긴 확인 메모이며 현재 빈자리·영업 여부를 보장하지 않습니다.",12,MUTED,false));gap(selection,12);
+            selection.addView(action("주차 확인 내용 기록",false,this::editEvidence),size(-1,-2));gap(selection,8);
+            selection.addView(action("이 식당으로 경로 보기",true,()->navigate(selectedRestaurant,false)),size(-1,-2));gap(selection,8);
+            selection.addView(action("주변 주차장 찾기",!"available".equals(decision),()->load("parking")),size(-1,-2));gap(selection,8);
             selection.addView(action("장소 정보 · 리뷰 열기",false,()->openDetails(selectedRestaurant)),size(-1,-2));
         }
         gap(right,18);
@@ -162,10 +181,21 @@ public final class NearbyStopsView {
             right.addView(text("03  가까운 주차장",19,INK,true));gap(right,6);
             right.addView(text((selectedRestaurant==null?anchor.name:selectedRestaurant.destination.name)+" 기준 직선거리 · 빈자리·요금·운영시간 미확인",13,MUTED,false));gap(right,12);
             if(parkings.isEmpty())right.addView(text("반경 3km에서 등록된 주차장을 찾지 못했어요. 식당에 주차 가능 여부를 확인해 주세요.",16,MUTED,false));
-            for(Place place:parkings){LinearLayout card=card(PANEL);card.addView(badge(distance(place.distance)));gap(card,8);card.addView(text(place.destination.name,20,INK,true));gap(card,7);card.addView(text(place.destination.address,14,MUTED,false));gap(card,13);card.addView(action("이 주차장으로 경로 보기",true,()->navigate(place)),size(-1,-2));right.addView(card,size(-1,-2));gap(right,10);}
+            for(Place place:parkings){LinearLayout card=card(PANEL);card.addView(badge(distance(place.distance)));gap(card,8);card.addView(text(place.destination.name,20,INK,true));gap(card,7);card.addView(text(place.destination.address,14,MUTED,false));gap(card,13);card.addView(action("이 주차장으로 경로 보기",true,()->navigate(place,true)),size(-1,-2));right.addView(card,size(-1,-2));gap(right,10);}
         }
     }
-    private void navigate(Place place){if(!allowed()||place==null)return;host.navigate(place.destination);}
+    private void navigate(Place place,boolean parking){if(!allowed()||place==null)return;host.navigate(place.destination,selectedRestaurant==null?null:selectedRestaurant.destination,parking);}
+    private void chooseAnchor(){
+        if(!allowed())return;final List<DestinationPlace> places=host.anchors();String[] labels=new String[places.size()];for(int i=0;i<places.size();i++)labels[i]=places.get(i).name;
+        dialog=new AlertDialog.Builder(activity).setTitle("어느 장소 주변을 찾을까요?").setItems(labels,(d,i)->{if(allowed())host.chooseAnchor(places.get(i));}).setNegativeButton("닫기",null).show();
+    }
+    private void editEvidence(){
+        if(!allowed()||selectedRestaurant==null)return;final String id=selectedRestaurant.destination.id;ParkingEvidenceStore.Evidence old=evidence.get(id);LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));form.addView(text("직접 확인한 내용만 기록해 주세요. 저장 시각과 출처가 함께 남습니다.",14,MUTED,false));gap(form,10);
+        RadioGroup status=new RadioGroup(activity);String[] labels={"자체 주차 가능","자체 주차 불가","확인 필요"},values={"available","unavailable","unknown"};for(int i=0;i<labels.length;i++){RadioButton radio=new RadioButton(activity);radio.setId(100+i);radio.setText(labels[i]);radio.setMinHeight(dp(48));status.addView(radio);if(old==null&&i==2||old!=null&&old.status.equals(values[i]))status.check(100+i);}form.addView(status);
+        Spinner source=new Spinner(activity);String[] sources={"직접 방문 확인","식당에 전화 확인","장소 정보·리뷰에서 확인"};source.setAdapter(new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,sources));if(old!=null)for(int i=0;i<sources.length;i++)if(sources[i].equals(old.source))source.setSelection(i);form.addView(source,size(-1,52));
+        EditText note=new EditText(activity);note.setTextSize(16);note.setMinLines(2);note.setMaxLines(4);note.setHint("예: 가게 뒤 주차장 이용 가능, 사장님 전화 확인");note.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(300)});if(old!=null)note.setText(old.note);form.addView(note,size(-1,-2));
+        AlertDialog editor=new AlertDialog.Builder(activity).setTitle("내 주차 확인 메모").setView(form).setPositiveButton("저장",null).setNegativeButton("취소",null).setNeutralButton("기록 삭제",(d,w)->{if(allowed()){evidence.remove(id);render();}}).create();dialog=editor;editor.show();editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{if(!allowed())return;if(note.getText().toString().trim().isEmpty()){note.setError("확인한 근거를 적어 주세요.");return;}evidence.save(id,values[Math.max(0,Math.min(2,status.getCheckedRadioButtonId()-100))],sources[source.getSelectedItemPosition()],note.getText().toString(),System.currentTimeMillis());editor.dismiss();render();});
+    }
     private void openDetails(Place place){
         if(!allowed()||place==null)return;
         try{activity.startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://place.map.kakao.com/"+place.destination.id)));}

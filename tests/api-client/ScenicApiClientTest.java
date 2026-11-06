@@ -166,6 +166,17 @@ public final class ScenicApiClientTest {
         failsSafely(() -> client.plan(freshOrigin,0,"all",20000),null);
         failsSafely(() -> client.plan(freshOrigin,90,"secret",20000),null);
         failsSafely(() -> client.plan(freshOrigin,90,"all",1),null);
+        FakeConnection loopPlan=respond(200,"{\"status\":\"no_candidates\"}");
+        client.plan(freshOrigin,60,"sea",20000,true,0);
+        JSONObject loopPrefs=new JSONObject(new String(loopPlan.output.toByteArray(),StandardCharsets.UTF_8)).getJSONObject("preferences");
+        check(loopPrefs.length()==4&&loopPrefs.getBoolean("returnToOrigin")&&loopPrefs.getInt("stayMinutes")==0,"Round-trip no-stop preferences are explicit in native requests");
+        FakeConnection sightseeing=respond(200,"{\"status\":\"no_candidates\"}");
+        client.planAtSeoulCityHall(120,"all",false,30);
+        JSONObject sightseeingBody=new JSONObject(new String(sightseeing.output.toByteArray(),StandardCharsets.UTF_8));
+        check(sightseeingBody.getJSONObject("origin").getDouble("lat")==37.5665,"Extended demo request retains labeled public origin");
+        check(!sightseeingBody.getJSONObject("preferences").getBoolean("returnToOrigin")&&sightseeingBody.getJSONObject("preferences").getInt("stayMinutes")==30,"Sightseeing requests preserve selected thirty-minute stays");
+        failsSafely(() -> client.plan(freshOrigin,90,"all",20000,true,1),null);
+        failsSafely(() -> client.planAtSeoulCityHall(90,"all",false,-1),null);
         FakeConnection music = respond(200, "{\"source\":\"OpenAI\"}");
         check(client.music(new MusicContext("호수 드라이브", "lake", 90)).getString("source").equals("OpenAI"), "Return music response for strict playlist parsing");
         JSONObject musicBody = new JSONObject(new String(music.output.toByteArray(),StandardCharsets.UTF_8));

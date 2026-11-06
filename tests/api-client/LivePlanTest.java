@@ -22,6 +22,7 @@ public final class LivePlanTest {
         check(plan.totalDurationMin==42.5&&plan.roadDurationMin==12.5&&plan.visitDurationMin==30,"Preserve exact provider road plus visit metrics");
         check(plan.course.spots.length==2&&plan.course.spots[0].title.equals("첫 공원"),"Use actual chosen POIs as spots, not synthetic origin");
         check(plan.course.minutes==43,"Display integral total rounded up without losing exact budget check");
+        check(!plan.returnToOrigin&&plan.stayMinutes==15,"Legacy plans retain one-way fifteen-minute sightseeing defaults");
         check(LivePlan.parse(response(),43,37.50,126.98,20000).course!=null,"Accept total at budget boundary");
         try{LivePlan.parse(response(),42,37.50,126.98,20000);throw new AssertionError("Overbudget");}catch(org.json.JSONException expected){checks++;}
         for(String status:new String[]{"no_candidates","no_feasible_route"}){
@@ -65,6 +66,24 @@ public final class LivePlanTest {
         LivePlanOrigin demo=LivePlanOrigin.seoulCityHall();
         check(demo.publicDemo&&demo.label().contains("실제 현재 위치 아님")&&demo.canApply(1,1,null),"Explicit public-origin demo never requires or pretends to be device GPS");
         check(!demo.canApply(1,2,null),"Public-origin demo still rejects changed request generation");
+        JSONObject round=response();JSONObject loop=item(round);
+        loop.put("returnToOrigin",true).put("stayMinutes",0).put("visitDurationMin",0).put("totalDurationMin",20);
+        loop.getJSONObject("routing").put("durationMin",20).getJSONArray("coordinates").put(new JSONArray("[37.5,126.98]"));
+        LivePlan returned=LivePlan.parse(round,30,37.5,126.98,20000,true,0);
+        check(returned.returnToOrigin&&returned.stayMinutes==0&&returned.visitDurationMin==0,"Round-trip pass-through semantics survive native validation");
+        check(returned.totalDurationMin==20&&returned.course.spots.length==2,"Return road time counts without adding a fake visit or stay");
+        check(returned.roadCoordinates[returned.roadCoordinates.length-1][0]==37.5,"Round-trip geometry returns to requested origin");
+        try{LivePlan.parse(round,19,37.5,126.98,20000,true,0);throw new AssertionError("Overbudget return");}catch(org.json.JSONException expected){checks++;}
+        try{LivePlan.parse(round,30,37.5,126.98,20000,false,0);throw new AssertionError("Unrequested return");}catch(org.json.JSONException expected){checks++;}
+        try{LivePlan.parse(round,30,37.5,126.98,20000,true,15);throw new AssertionError("Wrong stay");}catch(org.json.JSONException expected){checks++;}
+        try{LivePlan.parse(response(),90,37.5,126.98,20000,true,15);throw new AssertionError("Missing return semantics");}catch(org.json.JSONException expected){checks++;}
+        loop.getJSONObject("routing").put("coordinates",new JSONArray("[[37.5,126.98],[37.52,127]]"));
+        try{LivePlan.parse(round,30,37.5,126.98,20000,true,0);throw new AssertionError("Missing return geometry");}catch(org.json.JSONException expected){checks++;}
+        JSONObject longStay=response();item(longStay).put("returnToOrigin",false).put("stayMinutes",30).put("visitDurationMin",60).put("totalDurationMin",72.5);
+        check(LivePlan.parse(longStay,90,37.5,126.98,20000,false,30).stayMinutes==30,"Thirty-minute stops count once per visited place");
+        reject(j->item(j).put("returnToOrigin","false"),"Reject coerced return flag");
+        reject(j->item(j).put("stayMinutes","15"),"Reject coerced stop duration");
+        reject(j->item(j).put("stayMinutes",10),"Reject unsupported stop duration");
         System.out.println("LivePlanTest: "+checks+" checks passed");
     }
 }

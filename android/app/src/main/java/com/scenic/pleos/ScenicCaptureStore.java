@@ -19,7 +19,7 @@ public final class ScenicCaptureStore {
             this.segmentName=segmentName;this.imageKey=imageKey;this.createdAt=createdAt;this.sharedPreview=sharedPreview;
         }
     }
-    private static final int MAX_RECORDS=60;
+    private static final int MAX_RECORDS=10000;
     private final Persistence persistence;
     private final ArrayList<Record> records=new ArrayList<>();
     private boolean sharingEnabled;
@@ -47,9 +47,12 @@ public final class ScenicCaptureStore {
         if(draft==null)throw new IllegalArgumentException("A draft is required");
         for(Record record:records)if(record.id.equals(draft.id))return record;
         Record saved=new Record(draft.id,draft.routeId,draft.routeName,draft.destination,draft.segmentName,draft.imageKey,draft.createdAt,sharingEnabled);
-        records.add(0,saved);while(records.size()>MAX_RECORDS)records.remove(records.size()-1);
+        if(records.size()>=MAX_RECORDS)throw new IllegalStateException("기록이 10,000개에 도달했어요. 필요한 기록을 보관한 뒤 일부를 직접 삭제해 주세요.");
+        records.add(0,saved);
         persist();return saved;
     }
+    /** Removing a local sample never removes a user's original video. */
+    public boolean remove(String id){for(int i=0;i<records.size();i++)if(records.get(i).id.equals(id)){records.remove(i);persist();return true;}return false;}
     public static String imageKeyFor(String segmentName,String destination) {
         String segment=segmentName==null?"":segmentName;
         if(segment.contains("광안")||segment.contains("민락")||segment.contains("수영"))return "gwangalli";
@@ -71,7 +74,7 @@ public final class ScenicCaptureStore {
         persistence.write(data.toString());
     }
     private void restore(String data) {
-        if(data==null||data.length()>1024*1024)return;
+        if(data==null||data.length()>16*1024*1024)return;
         String[] lines=data.split("\n");
         if(lines.length<2||!"SCENIC_CAPTURE_V1".equals(lines[0]))return;
         sharingEnabled="1".equals(lines[1]);
