@@ -33,6 +33,94 @@ test('parking lookup uses the exact selected restaurant coordinates', async () =
   assert.equal(result.kind, 'parking'); assert.equal(result.places.length, 1);
 });
 
+test('parking prefers public-name evidence over closer shop lots, then distance, before taking ten', async () => {
+  const documents = [
+    place({ id: '801', place_name: '카페오션스강릉수제버거 경포대점 주차장', distance: '107', category_group_code: 'PK6' }),
+    place({ id: '802', place_name: '강문해변 제2공영주차장', distance: '180', category_group_code: 'PK6' }),
+    place({ id: '803', place_name: '건물 공용주차장', distance: '15', category_group_code: 'PK6' }),
+    ...Array.from({ length: 7 }, (_, i) => place({ id: String(810 + i), place_name: `상가 ${i} 주차장`, distance: String(210 + i), category_group_code: 'PK6' })),
+    place({ id: '820', place_name: '시영주차장', distance: '150', category_group_code: 'PK6' }),
+    place({ id: '821', place_name: '공공주차장', distance: '300', category_group_code: 'PK6' }),
+    place({ id: '822', place_name: '구영주차장', distance: '400', category_group_code: 'PK6' }),
+    place({ id: '823', place_name: '군영주차장', distance: '500', category_group_code: 'PK6' }),
+    place({ id: '824', place_name: '먼 공영주차장', distance: '600', category_group_code: 'PK6' }),
+  ];
+  const result = await searchNearby({ ...input, kind: 'parking' }, { env, fetchImpl: async url => {
+    assert.equal(url.searchParams.get('size'), '15'); assert.equal(url.searchParams.get('sort'), 'distance');
+    assert.equal(url.searchParams.get('category_group_code'), 'PK6'); assert.equal(url.searchParams.get('radius'), '3000');
+    return Response.json({ documents });
+  } });
+  assert.equal(result.places.length, 10); assert.equal(result.ranking, 'public_label_then_distance');
+  assert.deepEqual(result.places.slice(0, 6).map(p => p.id), ['820', '802', '821', '822', '823', '824']);
+  assert.deepEqual(result.places.slice(6, 8).map(p => p.id), ['803', '801']);
+  assert.ok(result.places.every(p => p.parkingStatus === 'unknown' && !('free' in p) && !('open' in p) && !('remainingSpaces' in p)));
+});
+
+test('chosen food uses bounded restaurant keyword search and preserves provider relevance order', async () => {
+  const result = await searchNearby({ ...input, query: '  순두부  ' }, { env, fetchImpl: async url => {
+    assert.equal(url.pathname, '/v2/local/search/keyword.json');
+    assert.equal(url.searchParams.get('query'), '순두부');
+    assert.equal(url.searchParams.has('category_group_code'), false);
+    assert.equal(url.searchParams.get('sort'), 'accuracy');
+    assert.equal(url.searchParams.get('radius'), '3000');
+    return Response.json({ documents: [place({ id: '11', distance: '800', category_name: '음식점 > 한식 > 두부전문점' }), place({ id: '12', distance: '80' })] });
+  } });
+  assert.deepEqual(result.places.map(p => p.id), ['11', '12']);
+  assert.equal(result.ranking, 'relevance'); assert.equal(result.query, '순두부');
+  assert.equal(result.places[0].category, '음식점 > 한식 > 두부전문점');
+  assert.equal(result.places[0].phone, '051-123-4567');
+  assert.ok(result.places.every(p => p.parkingStatus === 'unknown' && !('rating' in p) && !('remainingSpaces' in p)));
+});
+
+test('regional coffee and bakery keywords include real cafés but reject unknown and non-food categories', async () => {
+  for (const query of ['커피', '황남빵']) {
+    const result = await searchNearby({ ...input, query }, { env, fetchImpl: async url => {
+      assert.equal(url.pathname, '/v2/local/search/keyword.json');
+      assert.equal(url.searchParams.has('category_group_code'), false);
+      assert.equal(url.searchParams.get('query'), query); assert.equal(url.searchParams.get('sort'), 'accuracy');
+      assert.equal(url.searchParams.get('radius'), '3000'); assert.equal(url.searchParams.get('size'), '15');
+      return Response.json({ documents: [
+        place({ id: '21', distance: '900', category_group_code: 'CE7', category_name: '음식점 > 카페' }),
+        place({ id: '22', distance: '30', category_group_code: 'AT4' }),
+        place({ id: '23', category_group_code: 'MT1' }), place({ id: '24', category_group_code: '' }),
+        place({ id: '25', category_group_code: undefined }), place({ id: '26', category_group_code: 'PK6' }),
+        place({ id: '27', distance: '100', category_group_code: 'FD6' }),
+        place({ id: '28', distance: '3001', category_group_code: 'CE7' }),
+      ] });
+    } });
+    assert.deepEqual(result.places.map(p => p.id), ['21', '27']);
+    assert.equal(result.places[0].category, '음식점 > 카페'); assert.equal(result.ranking, 'relevance');
+    assert.ok(result.places.every(p => p.parkingStatus === 'unknown'));
+  }
+  const defaults = await searchNearby(input, { env, fetchImpl: async url => {
+    assert.equal(url.searchParams.get('category_group_code'), 'FD6');
+    return Response.json({ documents: [place({ id: '31', category_group_code: 'CE7' }), place({ id: '32', category_group_code: 'FD6' })] });
+  } });
+  assert.deepEqual(defaults.places.map(p => p.id), ['32']);
+});
+
+test('food keyword errors do not fall back to an unrelated restaurant or category', async () => {
+  let calls = 0;
+  await assert.rejects(searchNearby({ ...input, query: '장칼국수' }, { env, fetchImpl: async () => { calls++; return new Response('', { status: 500 }); } }), error => error.status === 502);
+  assert.equal(calls, 1);
+  const empty = await searchNearby({ ...input, query: '장칼국수' }, { env, fetchImpl: async () => Response.json({ documents: [] }) });
+  assert.deepEqual(empty.places, []); assert.equal(empty.query, '장칼국수');
+});
+
+test('food preference is rejected for parking and malformed terms never reach the provider', async () => {
+  for (const query of ['', '   ', null, 1, 'a'.repeat(41), '회\u0000']) {
+    await assert.rejects(searchNearby({ ...input, query }, { env, fetchImpl: () => { throw new Error('unexpected'); } }), error => error.status === 400);
+  }
+  await assert.rejects(searchNearby({ ...input, kind: 'parking', query: '순두부' }, { env }), error => error.status === 400);
+});
+
+test('untrusted phone and category are omitted without creating opening or availability claims', async () => {
+  const result = await searchNearby(input, { env, fetchImpl: async () => Response.json({ documents: [place({ phone: 'javascript:bad', category_name: '한식\u0000', opening_hours: '24h', rating: 5, remainingSpaces: 7 })] }) });
+  assert.equal(result.places[0].phone, ''); assert.equal(result.places[0].category, '');
+  assert.equal(result.places[0].parkingStatus, 'unknown');
+  assert.ok(!('opening_hours' in result.places[0]) && !('rating' in result.places[0]));
+});
+
 test('bad coordinates/categories/extra input are rejected before fetch', async () => {
   const invalid = [null, [], { ...input, kind: '__proto__' }, { ...input, lat: '' }, { ...input, lon: Infinity }, { ...input, lat: 0 }, { ...input, lon: '129' }, { ...input, radius: 20000 }];
   for (const value of invalid) await assert.rejects(searchNearby(value, { env, fetchImpl: () => { throw new Error('unexpected fetch'); } }), error => error.status === 400);

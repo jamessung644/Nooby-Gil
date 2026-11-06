@@ -9,19 +9,21 @@ import android.widget.*;
 import java.io.*;
 import java.util.*;
 
-/** Photo-first discovery. Public example photos and local records are explicitly distinguished. */
+/** Region discovery first; real destination photos follow an explicit area selection. */
 public final class ScenicDiscoveryView {
     public interface Host {
         boolean canInteract();
         void chooseDestination(DestinationPlace place,String theme,int extraMinutes);
         default void searchDestination(){openAiPlanner();}
+        default void chooseRegion(DestinationPlace region){chooseDestination(region,"all",30);}
+        default void searchRegion(){searchDestination();}
         void openAiPlanner(); void startSampleJourney(); void openRecap(); void openNearby();
         java.util.List<ScenicCaptureStore.Record> records();
         default String originLabel(){return "경로에서 선택한 출발지";}
     }
     private static final int INK=0xff172323,MUTED=0xff687571,TEAL=0xff2d6659,LINE=0xffdce4df;
     private final Activity activity; private final Host host; private final SharedPreferences prefs;
-    private String filter="전체"; private LinearLayout body; private boolean wide; private AlertDialog dialog;
+    private String filter="전체"; private LinearLayout body; private boolean wide,samplesExpanded; private AlertDialog dialog;
     private final Map<String,Bitmap> images=new HashMap<>();
     private static final class Entry {
         final String id,name,subtitle,key,theme,label; final double lat,lon;
@@ -37,21 +39,93 @@ public final class ScenicDiscoveryView {
     private void render(){
         if(body==null)return;body.removeAllViews();
         LinearLayout hero=wide?row():col();hero.setGravity(Gravity.TOP);
-        LinearLayout intro=col();intro.setPadding(dp(8),dp(10),dp(24),dp(18));intro.addView(text("DISCOVER YOUR NEXT DRIVE",12,TEAL,true));gap(intro,12);intro.addView(text("마음에 드는 풍경에서,\n다음 드라이브를 시작하세요.",32,INK,true));gap(intro,12);intro.addView(text("목적지를 검색하고 · 주변 풍경 사진을 고르고 · 그곳을 거쳐 도착해요.",17,MUTED,false));gap(intro,18);
-        intro.addView(button("목적지 검색 · 풍경 사진 찾기  ⌕",true,host::searchDestination),size(-1,-2));gap(intro,10);
-        LinearLayout actions=row();actions.addView(button("AI 코스 찾기  ↗",true,host::openAiPlanner));space(actions,10);actions.addView(button("도착지 맛집·주차",false,host::openNearby));intro.addView(actions);
-        if(wide)hero.addView(intro,new LinearLayout.LayoutParams(0,-2,1.35f));else hero.addView(intro);
-        LinearLayout recap=col();recap.setPadding(dp(24),dp(22),dp(24),dp(22));recap.setBackground(bg(0xffe3eee7,0));recap.addView(text("DRIVE → CAPTURE → RECAP",12,TEAL,true));gap(recap,12);recap.addView(text("오늘의 풍경이\n이번 달의 추억으로",25,INK,true));gap(recap,10);recap.addView(text("내 영상을 골라 음악과 기억을 더해 보세요.\n샘플 자동 기록 체험도 준비되어 있어요.",15,MUTED,false));gap(recap,16);recap.addView(button("내 영상으로 리캡 만들기",true,host::openRecap),size(-1,-2));gap(recap,8);recap.addView(button("자동 기록 체험 · 18초",false,host::startSampleJourney),size(-1,-2));gap(recap,8);recap.addView(button("나의 월간 리캡  ·  샘플 기록 "+host.records().size()+"개",false,host::openRecap),size(-1,-2));
-        if(wide)hero.addView(recap,new LinearLayout.LayoutParams(0,-2,1));else hero.addView(recap,size(-1,-2));body.addView(hero);gap(body,26);
-        LinearLayout section=row();section.addView(text("한 장으로 발견하는 드라이브",23,INK,true),new LinearLayout.LayoutParams(0,-2,1));section.addView(button("사진 출처",false,this::credits));body.addView(section);gap(body,8);body.addView(text("장소 사진과 차창 풍경은 다를 수 있어요. 사진을 눌러 출처·확인 상태·내 관찰 기록을 함께 살펴보세요.",13,MUTED,false));gap(body,16);
-        LinearLayout filters=row();for(String label:new String[]{"전체","바다","도시","저장한 곳","내 관찰"}){TextView chip=button(label,filter.equals(label),()->{filter=label;render();});filters.addView(chip);space(filters,8);}HorizontalScrollView filterScroll=new HorizontalScrollView(activity);filterScroll.setHorizontalScrollBarEnabled(false);filterScroll.addView(filters);body.addView(filterScroll);gap(body,18);
-        LinearLayout cards=wide?row():col();cards.setGravity(Gravity.TOP);int count=0;
-        for(Entry entry:ENTRIES){if(!filter.equals("전체")&&!filter.equals(entry.label)&&!(filter.equals("저장한 곳")&&prefs.getBoolean(entry.id,false))&&!(filter.equals("내 관찰")&&observation(entry)!=null))continue;if(count++>0){if(wide)space(cards,16);else gap(cards,16);}View card=card(entry);cards.addView(card,wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));}
-        body.addView(cards,size(-1,-2));if(count==0)body.addView(text(filter.equals("내 관찰")?"장소 사진을 눌러 직접 본 위치·방향·날짜를 기록해 보세요.":"마음에 드는 장소의 ‘저장’을 눌러 모아보세요.",17,MUTED,false));
-        java.util.List<ScenicCaptureStore.Record> shared=new ArrayList<>();for(ScenicCaptureStore.Record record:host.records())if(record.sharedPreview)shared.add(record);
-        gap(body,28);body.addView(text("내가 남긴 풍경으로 다시 발견",23,INK,true));gap(body,8);body.addView(text("기록에서 공유 미리보기를 켠 장면이 여기에 표시됩니다. 이 기기에만 보이며 업로드하지 않습니다.",13,MUTED,false));gap(body,14);
-        if(shared.isEmpty())body.addView(button("첫 장면 담기 · 자동 기록 체험",false,host::startSampleJourney),size(-1,-2));
-        else {LinearLayout local=wide?row():col();local.setGravity(Gravity.TOP);for(int i=0;i<Math.min(3,shared.size());i++){ScenicCaptureStore.Record record=shared.get(i);LinearLayout item=col();item.setPadding(dp(14),dp(14),dp(14),dp(14));item.setBackground(bg(0xffffffff,LINE));item.addView(photo(record.imageKey,130));gap(item,10);item.addView(text(record.segmentName,18,INK,true));gap(item,6);item.addView(text("내 공유 미리보기 · 샘플 장면",13,MUTED,false));gap(item,10);item.addView(button("이 장소 다시 보기",false,()->detail(forKey(record.imageKey))),size(-1,-2));if(i>0){if(wide)space(local,12);else gap(local,12);}local.addView(item,wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));}body.addView(local);}
+        LinearLayout intro=col();intro.setPadding(dp(8),dp(10),dp(24),dp(12));
+        intro.addView(text("A PLACE TO GO, A VIEW TO REMEMBER",12,TEAL,true));gap(intro,10);
+        intro.addView(text("어디로 떠나고 싶나요?",wide?34:29,INK,true));gap(intro,10);
+        intro.addView(text("지역을 먼저 고르고, 실제 풍경 사진으로 갈 곳을 정해요.",17,MUTED,false));
+        if(wide)hero.addView(intro,new LinearLayout.LayoutParams(0,-2,1.5f));else hero.addView(intro,size(-1,-2));
+        LinearLayout search=col();search.setPadding(dp(14),dp(12),dp(14),dp(12));
+        search.addView(button("다른 지역 검색하기  ⌕",true,host::searchRegion),size(-1,-2));gap(search,6);
+        search.addView(text("도시·여행 지역 이름으로 풍경을 찾아보세요.",12,MUTED,false));
+        if(wide)hero.addView(search,new LinearLayout.LayoutParams(0,-2,1));else hero.addView(search,size(-1,-2));
+        body.addView(hero,size(-1,-2));gap(body,18);
+
+        LinearLayout steps=wide?row():col();steps.setPadding(dp(18),dp(15),dp(18),dp(15));steps.setBackground(bg(0xffe6eee7,0));
+        addStep(steps,"01","지역","바다·산·도시 중 끌리는 곳");
+        addStep(steps,"02","풍경","사진 속 장소를 목적지로");
+        addStep(steps,"03","맛집·주차","도착지 근처에서 한 끼까지");body.addView(steps,size(-1,-2));gap(body,23);
+
+        body.addView(text("오늘의 드라이브 지역",23,INK,true));gap(body,7);
+        body.addView(text("지역을 고르면 주변 공개 사진을 불러와요. 아래 카드는 여행 테마를 담은 일러스트입니다.",13,MUTED,false));gap(body,14);
+        LinearLayout filters=row();for(String label:new String[]{"전체","바다","산·강","도시"}){filters.addView(button(label,filter.equals(label),()->{filter=label;render();}));space(filters,8);}
+        HorizontalScrollView filterScroll=new HorizontalScrollView(activity);filterScroll.setHorizontalScrollBarEnabled(false);filterScroll.addView(filters);body.addView(filterScroll);gap(body,16);
+        List<DriveRegion> shown=new ArrayList<>();for(DriveRegion region:DriveRegion.ALL)if(region.matchesFilter(filter))shown.add(region);
+        int columns=wide?3:1;
+        for(int index=0;index<shown.size();){
+            LinearLayout line=wide?row():col();line.setGravity(Gravity.TOP);
+            for(int col=0;col<columns;col++){
+                if(col>0)space(line,14);
+                if(index<shown.size())line.addView(regionCard(shown.get(index++)),wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));
+                else line.addView(new View(activity),new LinearLayout.LayoutParams(0,1,1));
+            }
+            body.addView(line,size(-1,-2));gap(body,16);
+        }
+        body.addView(text("지역은 사진을 찾는 탐색 중심이에요. 방문할 장소와 도로 경로는 다음 단계에서 선택합니다.",12,MUTED,false));gap(body,28);
+
+        LinearLayout extra=wide?row():col();extra.setGravity(Gravity.TOP);
+        LinearLayout recap=col();recap.setPadding(dp(20),dp(19),dp(20),dp(19));recap.setBackground(bg(0xffedf1eb,0));
+        recap.addView(text("다녀온 뒤에는, 나의 월간 리캡",21,INK,true));gap(recap,8);
+        recap.addView(text("내 영상을 골라 음악과 한 줄의 기억을 더해요.",14,MUTED,false));gap(recap,14);recap.addView(button("내 영상으로 리캡 만들기",false,host::openRecap),size(-1,-2));
+        LinearLayout tools=col();tools.setPadding(dp(20),dp(19),dp(20),dp(19));tools.setBackground(bg(0xffffffff,LINE));tools.addView(text("이미 갈 곳을 정했다면",21,INK,true));gap(tools,8);
+        tools.addView(text("정해둔 목적지의 경로나 주변 식당을 살펴보세요.",14,MUTED,false));gap(tools,14);
+        LinearLayout actions=row();actions.addView(button("목적지 검색",false,host::searchDestination),new LinearLayout.LayoutParams(0,-2,1));space(actions,8);actions.addView(button("맛집·주차",false,host::openNearby),new LinearLayout.LayoutParams(0,-2,1));tools.addView(actions);
+        if(wide){extra.addView(recap,new LinearLayout.LayoutParams(0,-2,1));space(extra,16);extra.addView(tools,new LinearLayout.LayoutParams(0,-2,1));}else{extra.addView(recap,size(-1,-2));gap(extra,14);extra.addView(tools,size(-1,-2));}body.addView(extra,size(-1,-2));gap(body,22);
+        body.addView(button(samplesExpanded?"부산 샘플·내 관찰 기록 접기  −":"부산 샘플·내 관찰 기록 펼치기  ＋",false,()->{samplesExpanded=!samplesExpanded;render();}),size(-1,-2));
+        if(samplesExpanded)renderSamples();
+    }
+
+    private void addStep(LinearLayout steps,String number,String title,String description){
+        LinearLayout step=row();step.setPadding(dp(4),dp(5),dp(12),dp(5));TextView index=text(number,21,TEAL,true);step.addView(index);space(step,12);
+        LinearLayout content=col();content.addView(text(title,17,INK,true));gap(content,4);content.addView(text(description,12,MUTED,false));step.addView(content,new LinearLayout.LayoutParams(0,-2,1));
+        steps.addView(step,wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));
+    }
+    private View regionCard(DriveRegion region){
+        LinearLayout card=col();card.setPadding(dp(15),dp(15),dp(15),dp(17));card.setBackground(bg(0xffffffff,LINE));
+        FrameLayout artwork=new FrameLayout(activity);artwork.setBackground(bg(0xffe7eeeb,0));artwork.setClipToOutline(true);artwork.addView(new RegionIllustration(region),new FrameLayout.LayoutParams(-1,-1));
+        TextView theme=text(region.driveTheme,15,INK,true);theme.setPadding(dp(15),dp(12),dp(15),dp(12));artwork.addView(theme,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));card.addView(artwork,size(-1,110));gap(card,14);
+        card.addView(text(region.name,26,INK,true));gap(card,8);TextView landscape=text(region.scenery,14,MUTED,false);landscape.setMinHeight(dp(39));card.addView(landscape);gap(card,9);
+        card.addView(text("함께 맛볼 것  ·  "+region.foodLabel(),13,TEAL,true));gap(card,8);
+        card.addView(text("탐색 기준  ·  "+region.centerLabel,12,MUTED,false));gap(card,14);
+        card.addView(button("이 지역 풍경 보기  →",true,()->choose(region)),size(-1,-2));gap(card,8);
+        TextView source=button("지역·먹거리 정보",false,()->regionInfo(region));source.setTextSize(12);source.setPadding(dp(10),dp(10),dp(10),dp(10));card.addView(source,size(-1,-2));return card;
+    }
+    private void choose(DriveRegion region){if(!allowed())return;pause();try{host.chooseRegion(region.toDestination());}catch(Exception invalid){Toast.makeText(activity,"지역 정보를 확인하지 못했어요. 다른 지역을 선택해 주세요.",Toast.LENGTH_SHORT).show();}}
+    private void regionInfo(DriveRegion region){
+        if(!allowed())return;pause();dialog=new AlertDialog.Builder(activity).setTitle(region.name+" · 여행 힌트")
+                .setMessage(region.scenery+"\n"+region.driveTheme+"\n\n함께 맛볼 음식: "+region.foodLabel()+"\n\n공식 관광 자료를 참고한 지역 소개입니다. 식당의 영업 여부·메뉴·주차 가능 여부는 방문할 장소를 선택한 뒤 확인해 주세요.\n\n탐색 기준점은 지역 사진 검색용이며 사진 촬영 지점이나 최종 목적지가 아닙니다.\n\n"+region.officialSource)
+                .setPositiveButton("관광 정보 열기",(d,w)->openOfficial(region.officialSourceUrl)).setNeutralButton("음식 정보 열기",(d,w)->openOfficial(region.foodSourceUrl)).setNegativeButton("닫기",null).show();
+    }
+    private void openOfficial(String url){if(!allowed())return;try{activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,android.net.Uri.parse(url)));}catch(Exception unavailable){Toast.makeText(activity,"링크를 열 수 있는 앱이 없어요.",Toast.LENGTH_SHORT).show();}}
+    private final class RegionIllustration extends View {
+        private final DriveRegion region;private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+        RegionIllustration(DriveRegion region){super(activity);this.region=region;setContentDescription(region.name+" 여행 테마 일러스트. 실제 장소 사진이 아닙니다.");}
+        @Override protected void onDraw(Canvas canvas){
+            super.onDraw(canvas);float w=getWidth(),h=getHeight();boolean city="city".equals(region.scene),water="water".equals(region.scene);
+            canvas.drawColor(city?0xffe8e4da:water?0xffdfeae0:0xffdeedf0);
+            paint.setColor(0xfff1d8a0);canvas.drawCircle(w*.81f,h*.27f,h*.18f,paint);
+            paint.setColor(city?0xffbac5c0:water?0xffa8c1ac:0xffb1cdd2);
+            Path back=new Path();back.moveTo(0,h*.53f);back.cubicTo(w*.22f,h*.13f,w*.32f,h*.75f,w*.57f,h*.38f);back.cubicTo(w*.75f,h*.05f,w*.86f,h*.62f,w,h*.36f);back.lineTo(w,h);back.lineTo(0,h);back.close();canvas.drawPath(back,paint);
+            paint.setColor(city?0xffd2d9ce:water?0xffccdfcf:0xffcce2e0);Path front=new Path();front.moveTo(0,h*.68f);front.cubicTo(w*.3f,h*.4f,w*.55f,h*.9f,w,h*.6f);front.lineTo(w,h);front.lineTo(0,h);front.close();canvas.drawPath(front,paint);
+            paint.setColor(0x88ffffff);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(2));Path line=new Path();line.moveTo(w*.08f,h*.53f);line.cubicTo(w*.28f,h*.42f,w*.53f,h*.69f,w*.78f,h*.48f);canvas.drawPath(line,paint);paint.setStyle(Paint.Style.FILL);
+        }
+    }
+    private void renderSamples(){
+        gap(body,14);body.addView(text("부산 공개 사진으로 살펴보는 샘플",20,INK,true));gap(body,8);
+        body.addView(text("기존 공개 사진·직접 남긴 관찰 기록입니다. 다른 지역의 실제 풍경 사진으로 사용하지 않아요.",13,MUTED,false));gap(body,14);
+        LinearLayout cards=wide?row():col();cards.setGravity(Gravity.TOP);for(int i=0;i<ENTRIES.length;i++){if(i>0){if(wide)space(cards,14);else gap(cards,14);}cards.addView(card(ENTRIES[i]),wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));}body.addView(cards,size(-1,-2));gap(body,12);
+        LinearLayout actions=wide?row():col();actions.addView(button("사진 출처",false,this::credits));if(wide)space(actions,8);else gap(actions,8);actions.addView(button("자동 기록 체험 · 18초",false,host::startSampleJourney));if(wide)space(actions,8);else gap(actions,8);actions.addView(button("AI 코스 찾기",false,host::openAiPlanner));body.addView(actions);gap(body,20);
+        List<ScenicCaptureStore.Record> shared=new ArrayList<>();for(ScenicCaptureStore.Record record:host.records())if(record.sharedPreview)shared.add(record);
+        if(!shared.isEmpty()){body.addView(text("내 공유 미리보기 · 이 기기에만 저장",18,INK,true));gap(body,12);LinearLayout local=wide?row():col();local.setGravity(Gravity.TOP);for(int i=0;i<Math.min(3,shared.size());i++){ScenicCaptureStore.Record record=shared.get(i);LinearLayout item=col();item.setPadding(dp(14),dp(14),dp(14),dp(14));item.setBackground(bg(0xffffffff,LINE));item.addView(photo(record.imageKey,120));gap(item,10);item.addView(text(record.segmentName,16,INK,true));gap(item,6);item.addView(text("샘플 장면 · 실제 촬영 아님",12,MUTED,false));gap(item,8);item.addView(button("관찰 기록 보기",false,()->detail(forKey(record.imageKey))),size(-1,-2));if(i>0){if(wide)space(local,12);else gap(local,12);}local.addView(item,wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));}body.addView(local);}
     }
     private View card(Entry entry){LinearLayout card=col();card.setBackground(bg(0xffffffff,LINE));card.setPadding(dp(14),dp(14),dp(14),dp(18));View photo=photo(entry.key,wide?196:220);photo.setOnClickListener(v->{if(allowed())detail(entry);});photo.setContentDescription(entry.name+" 공개 사진 · 출처와 관찰 기록 보기");photo.setFocusable(true);card.addView(photo);gap(card,14);card.addView(text(entry.label+"  /  부산 · 공개 장소 사진",12,TEAL,true));gap(card,8);card.addView(text(entry.name,23,INK,true));gap(card,8);card.addView(text(entry.subtitle,15,MUTED,false));gap(card,6);card.addView(text("도로 조망 미검증 · 촬영 방향·시기 미확인",12,MUTED,false));gap(card,6);card.addView(text(credit(entry.key),12,MUTED,false));ScenicEvidence.Observation own=observation(entry);if(own!=null){gap(card,8);card.addView(text("내 관찰 기록 · "+own.date,13,TEAL,true));}gap(card,8);card.addView(button("사진 근거·내 관찰 보기",false,()->detail(entry)),size(-1,-2));gap(card,10);LinearLayout actions=row();actions.addView(button("이 풍경으로 경로 비교",true,()->choose(entry)),new LinearLayout.LayoutParams(0,-2,1));space(actions,8);actions.addView(button(prefs.getBoolean(entry.id,false)?"저장됨":"저장",false,()->{prefs.edit().putBoolean(entry.id,!prefs.getBoolean(entry.id,false)).apply();render();}),size(78,-2));card.addView(actions);return card;}
     private void choose(Entry entry){if(!allowed())return;pause();try{host.chooseDestination(DestinationPlace.of(entry.id,entry.name,"부산 · 공개 예시 목적지",entry.lat,entry.lon),entry.theme,30);}catch(Exception invalid){Toast.makeText(activity,"장소 정보를 확인하지 못했어요.",Toast.LENGTH_SHORT).show();}}

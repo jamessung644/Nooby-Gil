@@ -35,7 +35,7 @@ export function createServer({env=process.env,fetchImpl=fetch}={}){
         if(url.pathname==='/api/nearby'&&req.method==='GET'){
           if(!url.searchParams.has('lat')||!url.searchParams.has('lon'))throw new ApiError('검색할 위치가 필요합니다.');
           const {searchNearby}=await import('./nearby.mjs');
-          return json(res,200,await searchNearby({kind:url.searchParams.get('kind'),lat:Number(url.searchParams.get('lat')),lon:Number(url.searchParams.get('lon'))},{env,fetchImpl}));
+          return json(res,200,await searchNearby({kind:url.searchParams.get('kind'),lat:Number(url.searchParams.get('lat')),lon:Number(url.searchParams.get('lon')),...(url.searchParams.has('query')?{query:url.searchParams.get('query')}:{})},{env,fetchImpl}));
         }
         if(url.pathname==='/api/catalog'&&req.method==='GET'){
           const {getPreparedCatalog}=await import('./android-catalog.mjs');

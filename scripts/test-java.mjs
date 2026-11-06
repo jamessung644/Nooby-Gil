@@ -90,7 +90,7 @@ async function testFiles(directory) {
 // New *Test.java files in these directories are automatically compiled and executed.
 const domainClasses = [
   'ApiRequestGate', 'CourseEngine', 'DestinationPlace', 'DestinationRoutePlan',
-  'EndpointPolicy', 'JourneyState', 'LivePlan', 'LivePlanOrigin', 'LocationFixPolicy',
+  'EndpointPolicy', 'DriveRegion', 'JourneyState', 'LivePlan', 'LivePlanOrigin', 'LocationFixPolicy',
   'MusicContext', 'MusicPlaylist', 'MusicRecommendationState', 'NationwideCatalog',
   'NavigationHandoffPlan', 'ParkingEvidenceStore', 'PersonalVideoStore', 'RouteProjection',
   'ScenicApiClient', 'ScenicCaptureStore', 'ScenicEvidence', 'ScenicLayoutPolicy', 'ScenicPhotoCollection',
