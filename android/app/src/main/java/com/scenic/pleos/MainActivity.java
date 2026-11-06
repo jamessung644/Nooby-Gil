@@ -372,7 +372,7 @@ public final class MainActivity extends Activity implements LocationListener {
                     navigationStatus=target.name+"이 만차여서 "+result.alternative.name+"으로 바꾸어 도로와 빈자리를 확인합니다.";toast(navigationStatus);
                     openParkingNavigation(result.alternative,restaurant,redirects+1);return;
                 }
-                navigationStatus=result.current.isAvailable(now)?"최신 빈자리 "+result.current.availableSpaces+"대를 확인했어요.":"빈자리는 미확인입니다. 선택한 주차장 위치로 안내합니다.";
+                navigationStatus=result.current.isAvailable(now)?(result.current.isSnapshot()?"공식 조회 빈자리 "+result.current.availableSpaces+"대 · 제공처 갱신 시각은 미제공입니다.":"최신 빈자리 "+result.current.availableSpaces+"대를 확인했어요."):"빈자리는 미확인입니다. 선택한 주차장 위치로 안내합니다.";
                 render();requestNativeNavigation(true);
             });
         });
@@ -402,7 +402,7 @@ public final class MainActivity extends Activity implements LocationListener {
     }
     private void addParkingWatchControls(LinearLayout panel){
         if(journey.parking()==null||!sameJourneyPlace(destinationPlace,journey.parking()))return;
-        gap(panel,12);panel.addView(txt("주차 안내를 시작하면 1분마다 빈자리를 확인합니다. 만차일 때는 빈자리가 확인된 주변 주차장으로 자동 변경합니다.",14,MUTED));
+        gap(panel,12);panel.addView(txt("주차 안내를 시작하면 1분마다 빈자리를 확인합니다. 현재 주차장과 대안 모두 제공처 갱신 시각이 확인된 최신 자료일 때 만차 자동 변경을 지원합니다.",14,MUTED));
         panel.addView(txt("실시간 정보 제공 지역만 확인 가능 · 최대 3시간 · 앱 또는 허용된 알림에서 중단 가능",12,MUTED));
         String status=ParkingWatchService.status(this);if(!status.isEmpty()){gap(panel,6);panel.addView(txt(status,14,INK));}
         if(ParkingWatchService.active(this)){gap(panel,8);panel.addView(button("자동 주차 확인 중단",false,()->{ParkingWatchService.stop(this);navigationStatus="자동 주차 확인을 중단했어요. 순정 내비 안내는 유지됩니다.";render();}),lp(-1,-2));}

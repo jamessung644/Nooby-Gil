@@ -2,12 +2,16 @@
 // This is the published dataset's JSON sheet, not an embedded third-party API key.
 // Live occupancy: https://data.seoul.go.kr/dataList/OA-21709/A/1/datasetView.do
 // Position/code join: https://data.seoul.go.kr/dataList/OA-13122/S/1/datasetView.do
+import { enrichEasternParkingPlaces } from './parking-regions-east.mjs';
+import { enrichJejuParkingPlaces } from './parking-regions-jeju.mjs';
+import { enrichNationalParkingPlaces } from './parking-regions-national.mjs';
 export const PARKING_SOURCE = '서울열린데이터광장 · 시영주차장';
 export const PARKING_SOURCE_URL = 'https://data.seoul.go.kr/dataList/OA-21709/A/1/datasetView.do';
 export const PARKING_FRESH_MS = 10 * 60 * 1000;
 const LIVE_TTL_MS = 30 * 1000, POSITION_TTL_MS = 24 * 60 * 60 * 1000;
 const caches = new WeakMap();
-const inSeoul = place => place.lat >= 37.40 && place.lat <= 37.72 && place.lon >= 126.75 && place.lon <= 127.20;
+const inSeoul = place => place.lat >= 37.40 && place.lat <= 37.72 && place.lon >= 126.75 && place.lon <= 127.20
+  && (!place.address || /^서울(?:특별시)?\s/.test(place.address));
 const coordinate = (lat, lon) => Number.isFinite(lat) && Number.isFinite(lon) && lat >= 37.40 && lat <= 37.72 && lon >= 126.75 && lon <= 127.20;
 const integer = value => (typeof value === 'number' || typeof value === 'string' && /^\d+$/.test(value))
   && Number.isSafeInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 100000 ? Number(value) : null;
@@ -124,7 +128,7 @@ export function matchParkingInventory(place, rows, positions, { now, fetchedAt =
   return { status: free > 0 ? 'available' : 'full', availableSpaces: free, totalSpaces: total,
     observedAt: toIso(observed), fetchedAt: toIso(fetchedAt), source: PARKING_SOURCE, sourceUrl: PARKING_SOURCE_URL, reason: 'live', providerId };
 }
-export async function enrichParkingPlaces(places, { fetchImpl = fetch, now = Date.now } = {}) {
+async function enrichSeoulParkingPlaces(places, { fetchImpl = fetch, now = Date.now } = {}) {
   const supported = places.some(inSeoul);
   let data = null;
   if (supported) { try { data = await inventory(fetchImpl, now); } catch { /* preserve useful places, never stale occupancy on provider failure */ } }
@@ -135,5 +139,36 @@ export async function enrichParkingPlaces(places, { fetchImpl = fetch, now = Dat
       // this response used the 30-second upstream cache or the vehicle clock is wrong.
       : matchParkingInventory(place, data.live.rows, data.positions, { now: time, fetchedAt: time });
     return { ...place, parkingStatus: parking.status, parking };
+  });
+}
+
+/** Municipal queries run independently; one unavailable city never masks another. */
+export function assessParkingFreshness(parking, now) {
+  const assessed = { ...parking, fetchedAt: toIso(now) };
+  if (parking.reason !== 'live') return assessed;
+  const stamp = Date.parse(parking.timeBasis === 'retrieved' ? parking.retrievedAt : parking.observedAt);
+  const maxAge = parking.timeBasis === 'retrieved' ? 90000 : PARKING_FRESH_MS;
+  if (!Number.isFinite(stamp) || stamp > now || now - stamp > maxAge) {
+    return { ...assessed, status: 'unknown', availableSpaces: null, totalSpaces: null,
+      reason: !Number.isFinite(stamp) || stamp > now ? 'unavailable' : 'stale' };
+  }
+  return assessed;
+}
+export async function enrichParkingPlaces(places, { fetchImpl = fetch, now = Date.now } = {}) {
+  const options = { fetchImpl, now };
+  const results = await Promise.all([
+    enrichSeoulParkingPlaces(places, options), enrichEasternParkingPlaces(places, options),
+    enrichJejuParkingPlaces(places, options), enrichNationalParkingPlaces(places, options),
+  ]);
+  const evaluated = now();
+  const quality = row => row?.parking?.reason === 'live' ? 3 : row?.parking?.providerId ? 2 : row?.parking?.source ? 1 : 0;
+  return places.map((place, index) => {
+    let selected = results[0][index];
+    for (const result of results.slice(1)) {
+      const candidate = result[index];
+      if (candidate !== place && quality(candidate) >= quality(selected)) selected = candidate;
+    }
+    const parking = assessParkingFreshness(selected.parking, evaluated);
+    return { ...selected, parkingStatus: parking.status, parking };
   });
 }

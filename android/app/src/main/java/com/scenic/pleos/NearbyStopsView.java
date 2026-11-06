@@ -228,7 +228,7 @@ public final class NearbyStopsView {
                 if(!place.availability.source.isEmpty()){card.addView(text(inventorySource(place),12,MUTED,false));gap(card,7);}
                 card.addView(text(publicParkingLabel(place)?"공영·공공 표기 · 요금·운영시간·입차 조건은 별도 확인":"시설 전용일 수 있음 · 이용조건 확인 필요",13,MUTED,false));gap(card,7);
                 if(excluded){card.addView(text("직접 만차·입차 불가로 제외한 곳입니다.",14,INK,true));}
-                else{card.addView(text("도착 전 잔여면은 달라질 수 있어요. 만차가 확인되면 빈자리 있는 다른 주차장을 찾습니다.",13,MUTED,false));gap(card,13);
+                else{card.addView(text(place.availability.isSnapshot()?"제공처 갱신 시각이 없어 주행 중 자동 변경은 보류합니다. 안내 전 재조회하며 도착 전 잔여면은 달라질 수 있어요.":"도착 전 잔여면은 달라질 수 있어요. 만차가 확인되면 빈자리 있는 다른 주차장을 찾습니다.",13,MUTED,false));gap(card,13);
                     card.addView(action(place.availability.isFull(now)?"빈자리 있는 다른 주차장 찾기":recommended?"빈자리 확인 · 추천 주차장 안내":place.availability.isAvailable(now)?"이 주차장까지 안내":"빈자리 미확인 · 위치로 안내",true,()->navigate(place,true)),size(-1,-2));}
                 gap(card,7);
                 card.addView(action("주차장 정보 열기",false,()->openDetails(place)),size(-1,-2));right.addView(card,size(-1,-2));gap(right,10);
@@ -247,8 +247,8 @@ public final class NearbyStopsView {
     private String parkingLabel(Place place,boolean recommended){return (excludedParkingIds.contains(place.destination.id)?"직접 제외 · ":recommended?"빈자리 확인 · 우선 추천 · ":place.availability.isFull(SystemClock.elapsedRealtime())?"만차 · ":publicParkingLabel(place)?"공영·공공 표기 · ":"시설 이용조건 확인 · ")+distance(place.distance);}
     private int parkingPriority(Place place,long now){return excludedParkingIds.contains(place.destination.id)?3:place.availability.priority(now);}
     private Place firstAvailable(List<Place> places,long now){for(Place place:places)if(!excludedParkingIds.contains(place.destination.id)&&place.availability.isAvailable(now))return place;return null;}
-    private String inventoryDescription(Place place,long now){ParkingAvailability state=place.availability;if(state.isAvailable(now))return "빈자리 "+state.availableSpaces+"대"+(state.totalSpaces==null?"":" / 전체 "+state.totalSpaces+"면");if(state.isFull(now))return "만차 · 현재 빈자리 0대";return "빈자리 미확인\n"+state.unavailableReason(now);}
-    private String inventorySource(Place place){ParkingAvailability state=place.availability;if(state.observedAtMillis<=0)return state.source;SimpleDateFormat format=new SimpleDateFormat("MM.dd HH:mm",Locale.KOREA);format.setTimeZone(TimeZone.getTimeZone("Asia/Seoul"));return state.source+" · "+format.format(new Date(state.observedAtMillis))+" 기준 (한국시간)";}
+    private String inventoryDescription(Place place,long now){ParkingAvailability state=place.availability;String prefix=state.isSnapshot()?"공식 조회 · ":"";if(state.isAvailable(now))return prefix+"빈자리 "+state.availableSpaces+"대"+(state.totalSpaces==null?"":" / 전체 "+state.totalSpaces+"면");if(state.isFull(now))return prefix+"만차 · 빈자리 0대";return "빈자리 미확인\n"+state.unavailableReason(now);}
+    private String inventorySource(Place place){ParkingAvailability state=place.availability;long time=state.isSnapshot()?state.retrievedAtMillis:state.observedAtMillis;if(time<=0)return state.source;SimpleDateFormat format=new SimpleDateFormat("MM.dd HH:mm",Locale.KOREA);format.setTimeZone(TimeZone.getTimeZone("Asia/Seoul"));return state.source+" · "+format.format(new Date(time))+(state.isSnapshot()?" 조회 (한국시간)\n제공처 갱신 시각 미제공":" 기준 (한국시간)");}
     private void finishParkingCheck(Place requested,PlacesResponse response){
         if(!allowed())return;Place fresh=response.focus;
         if(fresh!=null&&!requested.destination.id.equals(fresh.destination.id)){navigationMessage="선택한 주차장 응답이 일치하지 않아요. 다시 선택해 주세요.";render();return;}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enrichParkingPlaces, matchParkingInventory, parseParkingSheet, PARKING_FRESH_MS } from '../server/parking-live.mjs';
+import { assessParkingFreshness, enrichParkingPlaces, matchParkingInventory, parseParkingSheet, PARKING_FRESH_MS } from '../server/parking-live.mjs';
 import { searchNearby } from '../server/nearby.mjs';
 
 const time = Date.parse('2026-11-06T14:16:43.000Z');
@@ -14,6 +14,18 @@ const mockInventory = (rows = [row()], positionRows = [positionRow()]) => async 
   assert.equal(options.redirect, 'error'); assert.equal(options.method, 'POST'); assert.ok(options.signal instanceof AbortSignal);
   return sheet(url.searchParams.get('infId') === 'OA-21709' ? rows : positionRows);
 };
+
+test('final response reassesses original timestamps after other city requests finish', () => {
+  const original = matchParkingInventory(place(), [row({ NOW_PRK_VHCL_CNT: '25' })], positions(), { now: time });
+  const expired = assessParkingFreshness(original, time + PARKING_FRESH_MS + 1);
+  assert.equal(expired.status, 'unknown'); assert.equal(expired.reason, 'stale'); assert.equal(expired.availableSpaces, null);
+  assert.equal(expired.observedAt, original.observedAt); assert.equal(expired.fetchedAt, new Date(time + PARKING_FRESH_MS + 1).toISOString());
+  const snapshot = { ...original, observedAt: null, retrievedAt: new Date(time).toISOString(), timeBasis: 'retrieved' };
+  assert.equal(assessParkingFreshness(snapshot, time + 90000).status, 'available');
+  const agedSnapshot = assessParkingFreshness(snapshot, time + 90001);
+  assert.equal(agedSnapshot.reason, 'stale'); assert.equal(agedSnapshot.totalSpaces, null); assert.equal(agedSnapshot.retrievedAt, snapshot.retrievedAt);
+  assert.equal(assessParkingFreshness(snapshot, time - 1).status, 'unknown');
+});
 
 test('public sheet grammar is parsed without executing script or altering quoted data', () => {
   const parsed = parseParkingSheet('{result:"ok",page:{totalCount:1,},list:[{PKLT_NM:"이름 key: 값 ,]",LAT:"37.5",},]}');
@@ -65,8 +77,10 @@ test('tour coach and other explicitly restricted lots never advertise passenger-
   assert.equal(result.status, 'unknown'); assert.equal(result.reason, 'unsupported'); assert.equal(result.availableSpaces, null);
 });
 
-test('outside current Seoul coverage makes no public-provider requests and marks unsupported', async () => {
-  const result = await enrichParkingPlaces([place({ lat: 37.795, lon: 128.914 })], { fetchImpl: () => { throw new Error('must not fetch'); }, now: () => time });
+test('outside enabled city coverage makes no public-provider requests and marks unsupported', async () => {
+  let requests = 0;
+  const result = await enrichParkingPlaces([place({ lat: 36.56, lon: 128.73 })], { fetchImpl: () => { requests++; throw new Error('must not fetch'); }, now: () => time });
+  assert.equal(requests, 0);
   assert.equal(result[0].parkingStatus, 'unknown'); assert.equal(result[0].parking.reason, 'unsupported'); assert.equal(result[0].parking.source, '');
 });
 

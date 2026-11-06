@@ -65,6 +65,19 @@ public final class ParkingAvailabilityTest {
         rejected(()->{JSONObject bad=row("available",3,0);bad.getJSONObject("parking").put("observedAt",JSONObject.NULL);ParkingAvailability.read(bad,LOCAL);},"Live provider timestamp required");
         JSONObject noCapacity=row("available",3,0);noCapacity.getJSONObject("parking").put("totalSpaces",JSONObject.NULL);
         check(ParkingAvailability.read(noCapacity,LOCAL).isAvailable(LOCAL),"Explicit free counts can be used without inventing a total");
+        JSONObject snapshot=row("available",12,0);snapshot.getJSONObject("parking").put("timeBasis","retrieved").put("observedAt",JSONObject.NULL).put("retrievedAt",Instant.ofEpochMilli(SERVER-30000).toString());
+        ParkingAvailability fetched=ParkingAvailability.read(snapshot,LOCAL);
+        check(fetched.isSnapshot()&&fetched.observedAtMillis==0,"Official snapshot never fabricates an observation timestamp");
+        check(fetched.isAvailable(LOCAL)&&fetched.availableSpaces==12,"Recently retrieved official counts can be displayed and ranked");
+        check(!fetched.hasVerifiedObservation(LOCAL),"A fetched snapshot cannot authorize unattended rerouting");
+        check(fetched.isAvailable(LOCAL+60000)&&!fetched.isAvailable(LOCAL+60001),"Snapshot uses retrieval age plus monotonic elapsed and expires at 90 seconds");
+        check(fetched.unavailableReason(LOCAL+60001).contains("다시"),"Expired snapshot asks for another lookup");
+        check(available.hasVerifiedObservation(LOCAL),"Existing timestamped Seoul observations remain eligible");
+        JSONObject futureSnapshot=new JSONObject(snapshot.toString());futureSnapshot.getJSONObject("parking").put("retrievedAt",Instant.ofEpochMilli(SERVER+1).toString());
+        check(!ParkingAvailability.read(futureSnapshot,LOCAL).isFresh(LOCAL),"Server retrieval time cannot be in its own future");
+        rejected(()->{JSONObject bad=new JSONObject(snapshot.toString());bad.getJSONObject("parking").put("observedAt",Instant.ofEpochMilli(SERVER).toString());ParkingAvailability.read(bad,LOCAL);},"Retrieval timestamp cannot be disguised as observation");
+        rejected(()->{JSONObject bad=new JSONObject(snapshot.toString());bad.getJSONObject("parking").remove("retrievedAt");ParkingAvailability.read(bad,LOCAL);},"Live snapshot needs actual retrieval time");
+        rejected(()->{JSONObject bad=new JSONObject(snapshot.toString());bad.getJSONObject("parking").put("timeBasis","guessed");ParkingAvailability.read(bad,LOCAL);},"Unknown time semantics rejected");
         System.out.println("ParkingAvailabilityTest: "+checks+" checks passed");
     }
 }

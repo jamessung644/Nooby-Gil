@@ -32,18 +32,32 @@ export async function searchNearby(input, { env = process.env, fetchImpl = fetch
   const controller = new AbortController();
   let timer;
   try {
-    const data = await Promise.race([
-      (async () => {
-        const response = await fetchImpl(url, { headers: { Authorization: `KakaoAK ${key}` }, redirect: 'error', signal: controller.signal });
-        if (!response.ok) throw new ApiError(response.status === 401 || response.status === 403
-          ? '카카오 API 인증 또는 서비스 권한을 확인해 주세요.' : '주변 장소를 불러오지 못했어요. 다시 시도해 주세요.', 502);
-        return response.json();
-      })(),
-      new Promise((_resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(new ApiError('주변 장소 조회 시간이 초과됐어요. 다시 시도해 주세요.', 504)); }, 12000); }),
-    ]);
-    if (!Array.isArray(data?.documents)) throw new ApiError('주변 장소 검색 응답을 확인하지 못했어요.', 502);
+    // One deadline covers all Kakao pages. Dense districts can have fifteen
+    // private lots before the first public facility with official inventory.
+    const deadline = new Promise((_resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(new ApiError('주변 장소 조회 시간이 초과됐어요. 다시 시도해 주세요.', 504)); }, 12000); });
+    const page = async number => {
+      const requestUrl = new URL(url);
+      if (input.kind === 'parking') requestUrl.searchParams.set('page', String(number));
+      const response = await fetchImpl(requestUrl, { headers: { Authorization: `KakaoAK ${key}` }, redirect: 'error', signal: controller.signal });
+      if (!response.ok) throw new ApiError(response.status === 401 || response.status === 403
+        ? '카카오 API 인증 또는 서비스 권한을 확인해 주세요.' : '주변 장소를 불러오지 못했어요. 다시 시도해 주세요.', 502);
+      const data = await response.json();
+      if (!Array.isArray(data?.documents)) throw new ApiError('주변 장소 검색 응답을 확인하지 못했어요.', 502);
+      return data;
+    };
+    let data = await Promise.race([page(1), deadline]);
+    const documents = input.kind === 'parking' ? data.documents.slice(0, 15) : data.documents;
+    if (input.kind === 'parking') {
+      for (let number = 2; number <= 3 && data.meta?.is_end === false && !controller.signal.aborted; number++) {
+        try {
+          data = await Promise.race([page(number), deadline]);
+          documents.push(...data.documents.slice(0, 15));
+        } catch { break; /* A failed optional page must not discard earlier valid results. */ }
+      }
+    }
+    clearTimeout(timer); controller.abort();
     let places = []; const ids = new Set();
-    for (const item of input.kind === 'parking' ? data.documents.slice(0, 15) : data.documents) {
+    for (const item of documents) {
       if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !/^[0-9]{1,100}$/.test(item.id)
         || ids.has(item.id) || !clean(item.place_name, 120)
         || typeof item.x !== 'string' || !item.x.trim() || typeof item.y !== 'string' || !item.y.trim()

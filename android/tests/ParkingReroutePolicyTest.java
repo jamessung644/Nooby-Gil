@@ -36,6 +36,14 @@ public final class ParkingReroutePolicyTest {
         JSONObject moved=row("1","full",0).put("lat",37.6);reject(()->ParkingReroutePolicy.evaluate(response(moved,free),target,Collections.emptySet(),NOW),"Changed coordinates rejected");
         reject(()->ParkingReroutePolicy.evaluate(response(full,free).put("source","fixture"),target,Collections.emptySet(),NOW),"Wrong source rejected");
         JSONObject distant=row("2","available",12).put("distanceMeters",3001);reject(()->ParkingReroutePolicy.evaluate(response(full,distant),target,Collections.emptySet(),NOW),"Alternative must be near the meal anchor");
+        JSONObject fullSnapshot=row("1","full",0),freeSnapshot=row("2","available",12);
+        for(JSONObject snapshot:new JSONObject[]{fullSnapshot,freeSnapshot})snapshot.getJSONObject("parking").put("timeBasis","retrieved").put("observedAt",JSONObject.NULL).put("retrievedAt","2026-11-06T09:00:00Z");
+        check(ParkingReroutePolicy.evaluate(response(fullSnapshot,freeSnapshot),target,Collections.emptySet(),NOW).alternative.id.equals("2"),"User-requested preflight can use explicitly labelled official snapshots");
+        check(ParkingReroutePolicy.evaluateForAutomaticReroute(response(fullSnapshot,free),target,Collections.emptySet(),NOW).alternative==null,"Unattended reroute requires a source observation time for current full lot");
+        check(ParkingReroutePolicy.evaluateForAutomaticReroute(response(full,freeSnapshot),target,Collections.emptySet(),NOW).alternative==null,"Unattended reroute requires a source observation time for alternative");
+        check(ParkingReroutePolicy.evaluateForAutomaticReroute(response(full,free),target,Collections.emptySet(),NOW).alternative.id.equals("2"),"Timestamped automatic reroute remains supported");
+        for(JSONObject snapshot:new JSONObject[]{fullSnapshot,freeSnapshot})snapshot.getJSONObject("parking").put("fetchedAt",Instant.ofEpochMilli(NOW+90001).toString());
+        check(ParkingReroutePolicy.evaluate(response(fullSnapshot,freeSnapshot),target,Collections.emptySet(),NOW+90001).alternative==null,"Expired cached snapshot cannot change even a user-requested route");
         System.out.println("ParkingReroutePolicyTest: "+checks+" checks passed");
     }
     private interface Checked{void run()throws Exception;}

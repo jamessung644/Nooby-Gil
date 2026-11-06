@@ -13,16 +13,22 @@ public final class ParkingReroutePolicy {
         private Decision(ParkingAvailability current,DestinationPlace alternative,ParkingAvailability availability){this.current=current;this.alternative=alternative;alternativeAvailability=availability;}
     }
     public static Decision evaluate(JSONObject response,DestinationPlace target,Set<String> excluded,long now)throws JSONException {
+        return evaluate(response,target,excluded,now,false);
+    }
+    public static Decision evaluateForAutomaticReroute(JSONObject response,DestinationPlace target,Set<String> excluded,long now)throws JSONException {
+        return evaluate(response,target,excluded,now,true);
+    }
+    private static Decision evaluate(JSONObject response,DestinationPlace target,Set<String> excluded,long now,boolean requireObservation)throws JSONException {
         if(target==null||!"Kakao Local".equals(response.getString("source"))||!"parking".equals(response.getString("kind")))throw new JSONException("Invalid parking lookup");
         JSONArray rows=response.getJSONArray("places");if(rows.length()>10)throw new JSONException("Too many parking places");
         JSONObject focus=response.optJSONObject("focus");
         if(focus==null)for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(target.id.equals(row.optString("id")))focus=row;}
         ParkingAvailability current=ParkingAvailability.unknown(now);
         if(focus!=null){DestinationPlace found=place(focus);if(!samePlace(target,found))throw new JSONException("Parking focus changed");current=ParkingAvailability.read(focus,now);}
-        if(!current.isFull(now))return new Decision(current,null,null);
+        if(!current.isFull(now)||requireObservation&&!current.hasVerifiedObservation(now))return new Decision(current,null,null);
         for(int i=0;i<rows.length();i++){
             JSONObject row=rows.getJSONObject(i);DestinationPlace candidate=place(row);ParkingAvailability availability=ParkingAvailability.read(row,now);
-            if(!candidate.id.equals(target.id)&&!excluded.contains(candidate.id)&&availability.isAvailable(now))return new Decision(current,candidate,availability);
+            if(!candidate.id.equals(target.id)&&!excluded.contains(candidate.id)&&availability.isAvailable(now)&&(!requireObservation||availability.hasVerifiedObservation(now)))return new Decision(current,candidate,availability);
         }
         return new Decision(current,null,null);
     }

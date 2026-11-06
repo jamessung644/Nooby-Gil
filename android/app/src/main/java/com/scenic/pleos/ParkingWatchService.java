@@ -79,7 +79,7 @@ public final class ParkingWatchService extends Service {
             List<String> excluded=intent.getStringArrayListExtra("excluded");if(excluded!=null&&excluded.size()<=100)for(String id:excluded)if(id!=null&&id.matches("[0-9]{1,100}"))visited.add(id);
             getSharedPreferences(PREFS,0).edit().clear().putBoolean("active",true).putString("journeyId",journeyId).putString("targetId",target.id).putString("appTargetId",target.id).apply();
             NotificationManager manager=getSystemService(NotificationManager.class);manager.createNotificationChannel(new NotificationChannel(CHANNEL,"주차 빈자리 확인",NotificationManager.IMPORTANCE_LOW));
-            startForeground(NOTIFICATION,notification("안내 중 1분마다 확인 · 만차 시 빈자리 있는 곳으로 변경"));
+            startForeground(NOTIFICATION,notification("안내 중 1분마다 확인 · 제공처 갱신 시각 확인 시 만차 자동 변경"));
             connect();main.postDelayed(routeTimeout,90000);
         }catch(Exception|LinkageError unavailable){stop("자동 주차 확인을 시작하지 못했어요. 정차 후 주차 목록을 새로고침해 주세요.");}
         return START_NOT_STICKY;
@@ -113,9 +113,9 @@ public final class ParkingWatchService extends Service {
         if(matches(target,info)){
             ownedAt=SystemClock.elapsedRealtime();boolean first=!owned;owned=true;main.removeCallbacks(routeTimeout);
             if(pending!=null){
-                if(pendingAvailability==null||pendingCurrent==null||!pendingCurrent.isFull(SystemClock.elapsedRealtime())||!pendingAvailability.isAvailable(SystemClock.elapsedRealtime())){pending=null;pendingAvailability=pendingCurrent=null;schedule();return;}
+                if(pendingAvailability==null||pendingCurrent==null||!pendingCurrent.isFull(SystemClock.elapsedRealtime())||!pendingAvailability.isAvailable(SystemClock.elapsedRealtime())||!pendingCurrent.hasVerifiedObservation(SystemClock.elapsedRealtime())||!pendingAvailability.hasVerifiedObservation(SystemClock.elapsedRealtime())){pending=null;pendingAvailability=pendingCurrent=null;schedule();return;}
                 replace();
-            }else if(first){update("주차 빈자리 확인 중 · 만차 시 주변 빈자리로 자동 변경");schedule();}
+            }else if(first){update("주차 빈자리 확인 중 · 제공처 갱신 시각 확인 시 만차 자동 변경");schedule();}
         }else if(owned){stop("순정 내비 목적지가 바뀌어 자동 주차 확인을 중단했어요.");}
     }
     private void schedule(){main.removeCallbacks(tick);if(!stopping)main.postDelayed(tick,INTERVAL);}
@@ -128,7 +128,7 @@ public final class ParkingWatchService extends Service {
             ParkingReroutePolicy.Decision decision=null;String failure=null;
             try{
                 ScenicApiClient request=new ScenicApiClient(base);client=request;
-                decision=ParkingReroutePolicy.evaluate(request.nearbyParking(anchor,expected.id),expected,excluded,SystemClock.elapsedRealtime());
+                decision=ParkingReroutePolicy.evaluateForAutomaticReroute(request.nearbyParking(anchor,expected.id),expected,excluded,SystemClock.elapsedRealtime());
                 if(decision.alternative!=null){
                     DestinationRoutePlan road=DestinationRoutePlan.parse(request.destinationRoutes(expected.lat,expected.lon,decision.alternative,0,"all"),decision.alternative,expected.lat,expected.lon,0,"all");
                     double[] end=road.fast.coordinates[road.fast.coordinates.length-1];
@@ -141,6 +141,7 @@ public final class ParkingWatchService extends Service {
                 if(!valid(token)||!ParkingReroutePolicy.samePlace(target,expected))return;loading=false;
                 if(error!=null){update(error);schedule();return;}
                 long now=SystemClock.elapsedRealtime();
+                if(result.current.isSnapshot()){update(result.current.isFresh(now)?target.name+" · 공식 조회 "+result.current.availableSpaces+"면 · 제공처 갱신 시각 미제공으로 자동 변경 보류":"조회한 주차 현황이 오래되어 현재 안내를 유지합니다.");schedule();return;}
                 if(!result.current.isFull(now)){update(result.current.isAvailable(now)?target.name+" · 빈자리 "+result.current.availableSpaces+"면 확인":"현재 빈자리 미확인 · 기존 안내 유지");schedule();return;}
                 if(result.alternative==null){update("목적지가 만차예요. 주변에서 빈자리가 확인된 대체 주차장을 찾지 못했어요.");schedule();return;}
                 if(changes>=3||lastReroute>0&&SystemClock.elapsedRealtime()-lastReroute<120000){update("잦은 목적지 변경을 막기 위해 현재 안내를 유지합니다. 정차 후 주차 목록을 확인해 주세요.");schedule();return;}
