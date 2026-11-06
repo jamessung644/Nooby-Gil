@@ -102,7 +102,7 @@ public final class ScenicPhotoCollection {
     public static boolean safeImageUrl(String value){
         try{URI uri=new URI(value);String path=uri.getRawPath();return "https".equals(uri.getScheme())&&"tong.visitkorea.or.kr".equals(uri.getHost())
                 &&uri.getRawUserInfo()==null&&uri.getPort()==-1&&uri.getRawQuery()==null&&uri.getRawFragment()==null
-                &&path!=null&&path.matches("(?i)/cms/resource/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.(?:jpe?g|png|webp)");}
+                &&path!=null&&path.matches("(?i)/cms/(?:resource|resource_photo)/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.(?:jpe?g|png|webp)");}
         catch(Exception error){return false;}
     }
     private static boolean same(double a,double b){return Math.abs(a-b)<=0.0000001;}

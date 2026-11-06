@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "description": "현대자동차 공모전 — 경관 기반 드라이브 시제품",
-  "engines": { "node": ">=22" },
+  "engines": { "node": "^22.19.0 || >=24.6.0" },
   "scripts": {
-    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "start": "node --use-system-ca --env-file-if-exists=.env server/index.mjs",
     "test": "node --test tests/*.test.mjs",
     "check": "node scripts/check.mjs"
   }
