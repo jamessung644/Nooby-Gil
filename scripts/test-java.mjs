@@ -89,7 +89,7 @@ async function testFiles(directory) {
 // Keep this list restricted to production classes with no Android runtime dependency.
 // New *Test.java files in these directories are automatically compiled and executed.
 const domainClasses = [
-  'ApiRequestGate', 'CourseEngine', 'DestinationPlace', 'DestinationRoutePlan',
+  'ApiRequestGate', 'CheckpointTracker', 'CourseEngine', 'RouteCheckpoint', 'DestinationPlace', 'DestinationRoutePlan',
   'EndpointPolicy', 'DriveRegion', 'JourneyState', 'LivePlan', 'LivePlanOrigin', 'LocationFixPolicy',
   'MusicContext', 'MusicPlaylist', 'MusicRecommendationState', 'NationwideCatalog',
   'NavigationHandoffPlan', 'ParkingEvidenceStore', 'PersonalVideoStore', 'RouteProjection',

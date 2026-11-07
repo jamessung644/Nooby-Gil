@@ -1,6 +1,8 @@
 import { ApiError, buildKakaoUrl, normalizeKakao } from './providers.mjs';
 import { getPreparedCatalog } from './android-catalog.mjs';
 import { scenicSelectionSigner } from './scenic-photos.mjs';
+import { analyzeRoute, describeEvidence, findCheckpoints } from './scenery-grid.mjs';
+import { loadDriveCourses } from './drive-courses.mjs';
 
 const SOURCE = 'Kakao Mobility';
 const PLACE_SOURCE = '한국관광공사 TourAPI';
@@ -140,11 +142,18 @@ function scenery(title) {
   return themes;
 }
 
-export function selectScenicCandidates({ origin, destination, theme, fast }, catalog = getPreparedCatalog()) {
+// A requested scene outranks an 'all' match, and extra scene tags add a small bonus.
+// This ranks title-based hints only; it is not a measure of the road's actual view.
+const sceneValue = (themes, theme) => (theme === 'all' ? 2 : 3) + Math.min(1, (themes.length - 1) * 0.5);
+
+export function selectScenicCandidates({ origin, destination, theme, fast, extraMinutes = 30, limit = 3 }, catalog = getPreparedCatalog()) {
   const direct = distanceMeters(origin, destination);
   const target = project(destination, origin), denominator = target.x ** 2 + target.y ** 2;
   if (direct < 500 || !denominator) return [];
-  const corridor = Math.min(4000, Math.max(750, fast.distanceKm * 150));
+  // The reach grows with the extra time the user allows; 30 minutes is the reference
+  // and the reach never shrinks below it or grows past four times it.
+  const reach = Math.min(4, Math.max(1, extraMinutes / 30));
+  const corridor = Math.min(4000 * reach, Math.max(750, fast.distanceKm * 150));
   const seen = new Set(), candidates = [];
   for (const place of catalog.places) {
     if (!object(place) || !safeId(place.id) || seen.has(place.id) || !domesticCoordinate(place) || !text(place.title, 200)) continue;
@@ -152,8 +161,9 @@ export function selectScenicCandidates({ origin, destination, theme, fast }, cat
     if (!themes.length || (theme !== 'all' && !themes.includes(theme))) continue;
     // For places with several scenes, keep the requested theme first in labels.
     const selectedTheme = theme === 'all' ? themes[0] : theme;
+    const value = sceneValue(themes, theme);
     const fromStart = distanceMeters(origin, place), toEnd = distanceMeters(place, destination);
-    if (fromStart < 500 || toEnd < 500 || fromStart + toEnd - direct > Math.min(10000, Math.max(1500, direct * 0.4))) continue;
+    if (fromStart < 500 || toEnd < 500 || fromStart + toEnd - direct > Math.min(10000 * reach, Math.max(1500, direct * 0.4))) continue;
     const xy = project(place, origin), forward = (xy.x * target.x + xy.y * target.y) / denominator;
     // Explicitly exclude places behind the start or past the chosen destination.
     if (forward < 0.1 || forward > 0.9) continue;
@@ -162,20 +172,103 @@ export function selectScenicCandidates({ origin, destination, theme, fast }, cat
     seen.add(place.id);
     candidates.push({ id: place.id, name: place.title, lat: place.lat, lon: place.lon, theme: selectedTheme,
       themes: [selectedTheme, ...themes.filter(value => value !== selectedTheme)], source: PLACE_SOURCE,
-      baselineDistance: near.distance, score: near.distance + (fromStart + toEnd - direct) * 0.5 });
+      baselineDistance: near.distance, progress: near.progress, value,
+      score: near.distance + (fromStart + toEnd - direct) * 0.5 - value * 300 * reach });
   }
-  return candidates.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id)).slice(0, 3);
+  return candidates.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id)).slice(0, limit);
 }
 
+// Road-side scenery gained over the fast road, in the same units as a stop's scenery value (3-4).
+// In the test against curated drive courses the coastal share separated them from ordinary roads in
+// 88% of pairs, tunnels (fewer) and viewpoints (more) moderately; other terrains were not separated,
+// so only the coast, tunnels and viewpoints count. Missing measurements add nothing.
+const COAST_THEMES = new Set(['coast', 'all']);
+const MOUNTAIN_THEMES = new Set(['mountain', 'forest']);
+export function sceneryBonus(stats, fastStats, theme) {
+  if (!stats || !fastStats) return 0;
+  let bonus = 0;
+  if (COAST_THEMES.has(theme)) bonus += Math.min(3, Math.max(0, stats.coastKm - fastStats.coastKm) * 0.1);
+  // Mountain relief separated 18 non-coastal courses from ordinary roads in 65% of pairs (80% with the
+  // first 8 courses, so the early figure was too optimistic). It counts for less than the coast (83%).
+  if (MOUNTAIN_THEMES.has(theme)) bonus += Math.min(1.5, Math.max(0, (stats.mountainKm ?? 0) - (fastStats.mountainKm ?? 0)) * 0.04);
+  bonus += Math.min(0.5, Math.max(0, fastStats.tunnelKm - stats.tunnelKm) * 0.02);
+  bonus -= Math.min(1, Math.max(0, stats.tunnelKm - fastStats.tunnelKm) * 0.03);
+  // Viewpoints separated courses from ordinary roads in 67-73% of pairs, so they count a little more than before.
+  bonus += Math.min(0.8, Math.max(0, stats.viewpoints - fastStats.viewpoints) * 0.15);
+  return bonus;
+}
+// Recommended-road candidates: a stretch of a published drive course that lies along the way.
+// Two stops of one course (at most the two the native navigation accepts), in the course's own
+// direction of travel, with the first reached before the second on the way to the destination.
+const COURSE_THEMES = { all: null, coast: 'coast', water: 'water' };
+export function selectCuratedCandidates({ origin, destination, theme, fast, extraMinutes = 30, limit = 3 }, courses = loadDriveCourses()) {
+  const direct = distanceMeters(origin, destination);
+  const target = project(destination, origin), denominator = target.x ** 2 + target.y ** 2;
+  if (direct < 500 || !denominator || !Array.isArray(courses)) return [];
+  const reach = Math.min(4, Math.max(1, extraMinutes / 30));
+  const corridor = Math.min(4000 * reach, Math.max(750, fast.distanceKm * 150));
+  const detourLimit = Math.min(10000 * reach, Math.max(1500, direct * 0.4));
+  // Themes without a matching course kind (forest, mountain...) are served by the 'other' courses.
+  const wanted = theme in COURSE_THEMES ? COURSE_THEMES[theme] : 'other';
+  const best = [];
+  for (const course of courses) {
+    if (wanted && course.terrain !== wanted) continue;
+    const annotated = course.stops.map((stop, index) => {
+      if (!domesticCoordinate(stop)) return null;
+      const xy = project(stop, origin), forward = (xy.x * target.x + xy.y * target.y) / denominator;
+      const near = nearPolyline(stop, fast.coordinates, origin);
+      if (forward < 0.05 || forward > 0.95 || near.distance > corridor || near.progress < 0.05 || near.progress > 0.95) return null;
+      return { id: `${course.id}-${index + 1}`, name: stop.name, lat: stop.lat, lon: stop.lon, source: PLACE_SOURCE, progress: near.progress, baselineDistance: near.distance };
+    });
+    let pick = null;
+    for (const direction of [1, -1]) {
+      const sequence = direction === 1 ? annotated : annotated.slice().reverse();
+      for (let i = 0; i < sequence.length; i++) for (let j = i + 1; j < sequence.length; j++) {
+        const a = sequence[i], b = sequence[j];
+        if (!a || !b || a.progress >= b.progress) continue;
+        const span = distanceMeters(a, b);
+        const detour = distanceMeters(origin, a) + span + distanceMeters(b, destination) - direct;
+        if (span < 2000 || detour > detourLimit) continue;
+        const score = Math.min(span, 30000) - detour - 0.5 * Math.max(a.baselineDistance, b.baselineDistance);
+        if (!pick || score > pick.score) pick = { course: { id: course.id, title: course.title }, stops: [a, b], span, score };
+      }
+    }
+    if (pick) best.push(pick);
+  }
+  return best.sort((a, b) => b.score - a.score || a.course.id.localeCompare(b.course.id)).slice(0, limit);
+}
+
+// Places where a clip is worth recording, in driving order: the chosen places and the longest
+// stretches of coast, water and mountain. At most six, ids unique, every field short.
+/** "동해안일주해안도로(삼척), 등뼈를 타고 달리다!" becomes "동해안일주해안도로(삼척)". */
+function shortCourseTitle(title) {
+  const head = title.split(/[,!?:·]/)[0].trim();
+  const base = head.length >= 4 ? head : title;
+  return base.length > 24 ? `${base.slice(0, 23)}…` : base;
+}
+const MAX_CHECKPOINTS = 6;
+function routeCheckpoints(route, stops, grid) {
+  try {
+    const places = stops.map(stop => ({ id: stop.id, kind: 'place', name: String(stop.name).slice(0, 80), lat: stop.lat, lon: stop.lon, endLat: stop.lat, endLon: stop.lon, km: 0 }));
+    const merged = [...places, ...findCheckpoints(route.coordinates, grid, { limit: MAX_CHECKPOINTS - places.length })];
+    const order = item => nearPolyline(item, route.coordinates, route.coordinates[0] && point(route.coordinates[0])).progress;
+    return merged.slice(0, MAX_CHECKPOINTS).sort((a, b) => order(a) - order(b));
+  } catch { return []; }
+}
+
+const measure = (route, grid) => { try { return analyzeRoute(route.coordinates, grid); } catch { return null; } };
+
+// `waypoint` is null, one stop, or an ordered array of stops.
 async function roadRoute(origin, destination, waypoint, options) {
-  const url = buildKakaoUrl({ stops: waypoint ? [origin, waypoint, destination] : [origin, destination] });
+  const via = waypoint ? [].concat(waypoint) : [];
+  const url = buildKakaoUrl({ stops: [origin, ...via, destination] });
   // Official https://developers.kakaomobility.com/guide/navi-api/directions
   // 'motorway' means 자동차 전용 도로. This requests avoidance, not a guarantee
   // that every motorway is absent; the public geometry carries no road class.
   url.searchParams.set('priority', 'TIME');
-  url.searchParams.set('avoid', waypoint ? 'motorway|ferries' : 'ferries');
+  url.searchParams.set('avoid', via.length && !options.allowMotorway ? 'motorway|ferries' : 'ferries');
   const data = await requestJson(url, options);
-  if ((waypoint || options.exactDestination) && NO_ROUTE_CODES.has(data?.routes?.[0]?.result_code)) return null;
+  if ((via.length || options.exactDestination) && NO_ROUTE_CODES.has(data?.routes?.[0]?.result_code)) return null;
   const route = normalizeKakao(data);
   const geometryLength = route.coordinates.reduce((sum, coordinate, index, coordinates) => index ? sum + distanceMeters(point(coordinates[index - 1]), point(coordinate)) : sum, 0);
   if (route.coordinates.some(coordinate => !domesticCoordinate(point(coordinate)))
@@ -186,13 +279,26 @@ async function roadRoute(origin, destination, waypoint, options) {
     || (!options.exactDestination && distanceMeters(destination, point(route.coordinates.at(-1))) > 1000)) {
     throw new ApiError('선택한 출발지·목적지에 맞는 도로 경로를 확인하지 못했습니다.', 502);
   }
-  if (waypoint && nearPolyline(waypoint, route.coordinates, origin).distance > (options.exactSelection ? 150 : 700)) return null;
+  if (via.some(stop => nearPolyline(stop, route.coordinates, origin).distance > (options.exactSelection ? 150 : 700))) return null;
   if (options.exactDestination && (distanceMeters(destination, point(route.coordinates.at(-1))) > 150
     || nearPolyline(destination, route.coordinates, origin).distance > 150)) return null;
   return { ...route, durationSeconds: data.routes[0].summary.duration };
 }
 
-export async function planDestinationRoutes(input, { env = process.env, fetchImpl = fetch, catalog, selectionSigner = scenicSelectionSigner } = {}) {
+// Road-side evidence from the offline scenery grid. It only describes the chosen road;
+// it never alters which road is chosen, and a missing grid leaves the response unchanged.
+function roadEvidence(scenic, fast, theme) {
+  try {
+    if (!scenic || !fast) return { labels: [], sentence: '', evidence: undefined };
+    const { labels, sentence } = describeEvidence(scenic, fast);
+    // Say so when a coastal request did not gain meaningfully more coast than the fast road.
+    const thin = theme === 'coast' && scenic.coastKm - fast.coastKm < 3 ? ' 빠른 길보다 해안 구간이 크게 늘지는 않습니다.' : '';
+    return { labels, sentence: sentence + thin, evidence: { source: scenic.source, scenic, fast } };
+  } catch { return { labels: [], sentence: '', evidence: undefined }; }
+}
+
+// `scenery` is the offline scenery grid. Without it the road is chosen by place scenery alone.
+export async function planDestinationRoutes(input, { env = process.env, fetchImpl = fetch, catalog, selectionSigner = scenicSelectionSigner, scenery = null, courses = [] } = {}) {
   const { origin, destination, extraMinutes, theme, scenicSelection, mode } = validateInput(input);
   // Verify before making any provider request. Expired/tampered tokens never
   // fall back to a different scenic place or to a client-supplied coordinate.
@@ -213,7 +319,7 @@ export async function planDestinationRoutes(input, { env = process.env, fetchImp
   }
   const { durationSeconds: baselineSeconds, ...baseline } = await roadRoute(origin, destination, null, options);
   const fast = { ...baseline, id: 'fast', title: '빠른 경로', scenicLabels: [], waypoints: [], reason: '카카오의 시간 우선 옵션으로 조회한 목적지까지의 도로 경로입니다.' };
-  const response = (scenicStatus, message, scenic) => ({ origin, destination, routes: scenic ? [fast, scenic] : [fast], scenicStatus, message });
+  const response = (scenicStatus, message, scenic) => ({ origin, destination, routes: scenic ? [fast, ...[].concat(scenic)] : [fast], scenicStatus, message });
   if (extraMinutes === 0) return response('disabled', '추가 시간이 0분이어서 빠른 경로만 표시합니다.');
   if (selected) {
     let route;
@@ -229,28 +335,109 @@ export async function planDestinationRoutes(input, { env = process.env, fetchImp
       reason: `선택한 ${name} 인근 도로를 경유해 같은 목적지로 갑니다. 사진의 실제 촬영 위치와 차창 조망은 미확인입니다.`,
     });
   }
+  const budgetSeconds = extraMinutes * 60;
+  const withinBudget = route => route.durationSeconds <= baselineSeconds + budgetSeconds && route.distanceKm <= fast.distanceKm * 1.6 + 3;
+  const distinctPath = route => !(route.coordinates.length === fast.coordinates.length && route.coordinates.every((p, i) => p[0] === fast.coordinates[i][0] && p[1] === fast.coordinates[i][1]));
+  // Avoiding every 자동차 전용 도로 often exceeds the budget between cities, so one more
+  // lookup may allow them. The same budget and approach checks still apply to that road.
+  const scenicRoad = async stops => {
+    const route = await roadRoute(origin, destination, stops, options);
+    if (!route || withinBudget(route)) return route;
+    const mixed = await roadRoute(origin, destination, stops, { ...options, allowMotorway: true });
+    return mixed && { ...mixed, motorway: true };
+  };
+  const fastStats = scenery ? measure(fast, scenery) : null;
+
+  // A published drive course is offered next to the computed road, never blended into its score.
+  let curated = null;
+  for (const match of selectCuratedCandidates({ origin, destination, theme, fast, extraMinutes }, courses)) {
+    let route;
+    try { route = await scenicRoad(match.stops); } catch { break; }
+    if (!route || !withinBudget(route) || !distinctPath(route)) continue;
+    const { durationSeconds, motorway, ...publicRoute } = route;
+    const [from, to] = match.stops.map(stop => stop.name);
+    const stats = fastStats ? measure(route, scenery) : null;
+    const { labels: evidenceLabels, sentence } = roadEvidence(stats, fastStats, theme);
+    const short = shortCourseTitle(match.course.title);
+    const baseReason = `관광공사 소개 코스 ‘${short}’의 ${from} → ${to} 구간입니다. 코스 전체가 아니라 가는 길에 겹치는 일부입니다.`
+      + (motorway ? ' 일부 자동차 전용도로를 포함합니다.' : '');
+    curated = {
+      ...publicRoute, id: 'curated', title: '추천 코스 길', headline: `${short} 일부 · ${from} → ${to}`.slice(0, 120),
+      scenicLabels: [...new Set(['추천 코스', from, to, ...evidenceLabels])].slice(0, 8),
+      waypoints: match.stops.map(({ id, name, lat, lon, source }) => ({ id, name, lat, lon, source })),
+      ...(scenery ? { checkpoints: routeCheckpoints(route, match.stops, scenery) } : {}),
+      reason: sentence && baseReason.length + 1 + sentence.length <= 500 ? `${baseReason} ${sentence}` : baseReason,
+    };
+    break;
+  }
+  // The computed road follows; a recommended road alone still makes the answer useful.
+  const withCurated = (status, message, scenic) => curated
+    ? response('ok', scenic ? '추천 코스 길과 풍경 길을 같은 목적지로 제안합니다. 추천 코스는 소개된 일부 구간이며 조망·현장 통행은 보장하지 않습니다.'
+      : '추천 코스 길을 제안합니다. 소개된 코스의 일부 구간이며 조망·현장 통행은 보장하지 않습니다.', [curated, scenic].filter(Boolean))
+    : response(status, message, scenic);
+
   let candidates;
-  try { candidates = selectScenicCandidates({ origin, destination, theme, fast }, catalog); }
-  catch { return response('provider_unavailable', '풍경 기초정보를 확인하지 못해 빠른 경로만 표시합니다.'); }
-  if (!candidates.length) return response('no_candidates', `목적지로 가는 길 주변에서 ${theme === 'all' ? '조건에 맞는' : `선택한 ‘${SCENIC_THEMES[theme]}’`} 풍경 통과 지점을 찾지 못해 빠른 경로만 표시합니다.`);
+  // With measurements, more places are tried as roads and ranked by the scenery along each road.
+  try { candidates = selectScenicCandidates({ origin, destination, theme, fast, extraMinutes, limit: fastStats ? 5 : 3 }, catalog); }
+  catch { return withCurated('provider_unavailable', '풍경 기초정보를 확인하지 못해 빠른 경로만 표시합니다.'); }
+  if (!candidates.length) return withCurated('no_candidates', `목적지로 가는 길 주변에서 ${theme === 'all' ? '조건에 맞는' : `선택한 ‘${SCENIC_THEMES[theme]}’`} 풍경 통과 지점을 찾지 못해 빠른 경로만 표시합니다.`);
+  // Require a real approach toward every scenery stop, independent of polyline sampling.
+  const approaches = (stops, route) => stops.every(stop => nearPolyline(stop, route.coordinates, origin).distance <= stop.baselineDistance - 100);
+  // Scenery value gained per extra drive time; a second stop counts less than the first.
+  // A road that had to allow 자동차 전용 도로 to fit the time budget scores lower.
+  const efficiency = ({ stops, route, stats }) => stops.reduce((sum, stop, i) => sum + stop.value * (i ? 0.6 : 1), 0)
+    - 1.5 * Math.max(0, route.durationSeconds - baselineSeconds) / budgetSeconds - (route.motorway ? 0.5 : 0)
+    + sceneryBonus(stats, fastStats, theme);
   let providerFailed = false;
+  const found = [];
   for (const candidate of candidates) {
     let route;
-    try { route = await roadRoute(origin, destination, candidate, options); }
+    try { route = await scenicRoad(candidate); }
     catch { providerFailed = true; break; }
-    if (!route || route.durationSeconds > baselineSeconds + extraMinutes * 60 || route.distanceKm > fast.distanceKm * 1.6 + 3) continue;
-    // Require a real approach toward the scenery, independent of polyline sampling.
-    if (nearPolyline(candidate, route.coordinates, origin).distance > candidate.baselineDistance - 100) continue;
-    if (route.coordinates.length === fast.coordinates.length && route.coordinates.every((p, i) => p[0] === fast.coordinates[i][0] && p[1] === fast.coordinates[i][1])) continue;
-    const { id, name, lat, lon, source } = candidate;
-    const { durationSeconds, ...publicRoute } = route;
-    return response('ok', '두 경로는 같은 목적지로 갑니다. 풍경 경로는 인근 도로 통과 기준이며 조망·현장 통행은 보장하지 않습니다.', {
-      ...publicRoute, id: 'scenic', title: '풍경 경로', scenicLabels: [...candidate.themes.map(value => SCENIC_THEMES[value]), name],
-      waypoints: [{ id, name, lat, lon, source }],
-      reason: `${name} 인근을 지나 같은 목적지로 갑니다. 자동차 전용도로 회피 옵션을 적용했습니다.`,
-    });
+    if (!route || !withinBudget(route) || !approaches([candidate], route) || !distinctPath(route)) continue;
+    found.push({ stops: [candidate], route, stats: fastStats ? measure(route, scenery) : null });
   }
-  return response(providerFailed ? 'provider_unavailable' : 'no_feasible_route', providerFailed
+  found.sort((a, b) => efficiency(b) - efficiency(a));
+  let best = found[0];
+  // Two separate scenes need real spacing along the way. The destination limit of two
+  // stops matches what the native navigation can receive, so never exceed it.
+  if (!providerFailed && found.length >= 2) {
+    const pair = [found[0].stops[0], found[1].stops[0]].sort((a, b) => a.progress - b.progress);
+    if (pair[1].progress - pair[0].progress >= 0.1 && distanceMeters(pair[0], pair[1]) >= 1000) {
+      try {
+        const route = await scenicRoad(pair);
+        if (route && withinBudget(route) && approaches(pair, route) && distinctPath(route)
+          && nearPolyline(pair[0], route.coordinates, origin).progress < nearPolyline(pair[1], route.coordinates, origin).progress) {
+          const both = { stops: pair, route, stats: fastStats ? measure(route, scenery) : null };
+          if (efficiency(both) > efficiency(best)) best = both;
+        }
+      } catch { /* A failed pair lookup keeps the already verified single-stop route. */ }
+    }
+  }
+  if (best) {
+    const { stops } = best;
+    const { durationSeconds, motorway, ...publicRoute } = best.route;
+    const names = [...new Set(stops.map(stop => stop.name))];
+    const sceneLabels = [...new Set(stops.flatMap(stop => stop.themes.map(value => SCENIC_THEMES[value])))].slice(0, 8 - names.length);
+    const { labels: evidenceLabels, sentence, evidence } = roadEvidence(best.stats, fastStats, theme);
+    const baseReason = `${names.join(', ')} 인근을 ${stops.length > 1 ? '차례로 ' : ''}지나 같은 목적지로 갑니다.`
+      + (motorway ? ' 일부 자동차 전용도로를 포함합니다.' : '');
+    // Keep the contract limits: at most 8 labels and 500 characters of reason text.
+    const labels = [...new Set([...sceneLabels, ...names, ...evidenceLabels])].slice(0, 8);
+    const scenicMessage = curated
+      ? '추천 코스 길과 풍경 길을 같은 목적지로 제안합니다. 추천 코스는 소개된 일부 구간, 풍경 길은 인근 도로 통과 기준이며 조망·현장 통행은 보장하지 않습니다.'
+      : '두 경로는 같은 목적지로 갑니다. 풍경 경로는 인근 도로 통과 기준이며 조망·현장 통행은 보장하지 않습니다.';
+    return response('ok', scenicMessage, [...(curated ? [curated] : []), {
+      ...publicRoute, id: 'scenic', title: stops.length > 1 ? '풍경 경로 · 2곳 경유' : '풍경 경로',
+      headline: `${names.join(' → ')} 경유`.slice(0, 120),
+      scenicLabels: labels,
+      waypoints: stops.map(({ id, name, lat, lon, source }) => ({ id, name, lat, lon, source })),
+      ...(scenery ? { checkpoints: routeCheckpoints(publicRoute, stops, scenery) } : {}),
+      reason: sentence && baseReason.length + 1 + sentence.length <= 500 ? `${baseReason} ${sentence}` : baseReason,
+      ...(evidence ? { evidence } : {}),
+    }]);
+  }
+  return withCurated(providerFailed ? 'provider_unavailable' : 'no_feasible_route', providerFailed
     ? '풍경 경로의 도로 정보를 확인하지 못해 빠른 경로만 표시합니다. 잠시 후 다시 시도해 주세요.'
     : '추가 시간 안에 이용할 수 있는 다른 풍경 경로를 확인하지 못해 빠른 경로만 표시합니다.');
 }
