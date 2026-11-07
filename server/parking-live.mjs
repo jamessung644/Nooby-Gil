@@ -5,6 +5,7 @@
 import { enrichEasternParkingPlaces } from './parking-regions-east.mjs';
 import { enrichJejuParkingPlaces } from './parking-regions-jeju.mjs';
 import { enrichNationalParkingPlaces } from './parking-regions-national.mjs';
+import { enrichKotsaParkingPlaces } from './parking-kotsa.mjs';
 export const PARKING_SOURCE = '서울열린데이터광장 · 시영주차장';
 export const PARKING_SOURCE_URL = 'https://data.seoul.go.kr/dataList/OA-21709/A/1/datasetView.do';
 export const PARKING_FRESH_MS = 10 * 60 * 1000;
@@ -154,9 +155,11 @@ export function assessParkingFreshness(parking, now) {
   }
   return assessed;
 }
-export async function enrichParkingPlaces(places, { fetchImpl = fetch, now = Date.now } = {}) {
+export async function enrichParkingPlaces(places, { fetchImpl = fetch, now = Date.now, env = {} } = {}) {
   const options = { fetchImpl, now };
-  const results = await Promise.all([
+  const [kotsa, ...results] = await Promise.all([
+    // KOTSA (needs DATA_GO_KR_KEY) is the lowest-priority source: it only fills places no municipal source confirmed live.
+    enrichKotsaParkingPlaces(places, { env, fetchImpl, now }),
     enrichSeoulParkingPlaces(places, options), enrichEasternParkingPlaces(places, options),
     enrichJejuParkingPlaces(places, options), enrichNationalParkingPlaces(places, options),
   ]);
@@ -168,6 +171,8 @@ export async function enrichParkingPlaces(places, { fetchImpl = fetch, now = Dat
       const candidate = result[index];
       if (candidate !== place && quality(candidate) >= quality(selected)) selected = candidate;
     }
+    const fallback = kotsa[index];
+    if (fallback !== place && quality(selected) < 3 && quality(fallback) === 3) selected = fallback;
     const parking = assessParkingFreshness(selected.parking, evaluated);
     return { ...selected, parkingStatus: parking.status, parking };
   });

@@ -75,7 +75,7 @@ export async function searchNearby(input, { env = process.env, fetchImpl = fetch
         placeUrl: `https://place.map.kakao.com/${item.id}`, parkingStatus: 'unknown' });
       if (places.length === 10 && input.kind !== 'parking') break;
     }
-    if (input.kind === 'parking') places = await enrichParkingPlaces(places, { fetchImpl, now });
+    if (input.kind === 'parking') places = await enrichParkingPlaces(places, { fetchImpl, now, env });
     const availabilityOrder = { available: 0, unknown: 1, full: 2 };
     // Keyword relevance is Kakao's returned order, not an invented quality score.
     if (!query) places.sort((a, b) => (input.kind === 'parking' ? availabilityOrder[a.parkingStatus] - availabilityOrder[b.parkingStatus]
