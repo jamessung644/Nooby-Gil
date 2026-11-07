@@ -51,8 +51,8 @@ import java.io.ByteArrayInputStream;
 /** Visible, app-contained music window. The caller must close it on pause or a vehicle restriction. */
 @SuppressWarnings("deprecation")
 public final class MusicWebDialog {
-    private static final int INK = 0xff17191c, MUTED = 0xff656970, BG = 0xfff5f5f5;
-    private static final int ACCENT = 0xff17191c, SOFT = 0xffecedef;
+    private static final int INK = 0xff19332c, MUTED = 0xff65766f, BG = 0xfff5f7f5;
+    private static final int ACCENT = 0xff2c6656, SOFT = 0xffeaf1ec, PANEL = 0xffffffff, LINE = 0xffdee7e1;
     private final Activity activity;
     private final String initialUrl;
     private final Runnable onDismiss;
@@ -65,7 +65,7 @@ public final class MusicWebDialog {
     private ScrollView errorPanel;
     private TextView title, address, note, status, errorText;
     private ProgressBar progress;
-    private Button back, sizeButton, closeButton;
+    private Button back, selectedButton, refreshButton, sizeButton, closeButton;
     private int expandedWebWidth, expandedWebHeight;
     private float expandedPageScale = 1f, currentPageScale = Float.NaN;
     private int zoomPasses;
@@ -91,47 +91,69 @@ public final class MusicWebDialog {
         };
         dialog.setCanceledOnTouchOutside(false);
         root = column();
-        root.setPadding(dp(16), dp(8), dp(16), dp(8));
-        root.setBackgroundColor(BG);
+        root.setPadding(dp(16), dp(12), dp(16), dp(12));
+        root.setBackground(surface(BG, 16, LINE));
+        root.setClipToOutline(true);
         LinearLayout heading = row();
-        title = text("YouTube Music · 웹", 20, INK);
+        LinearLayout identity = column();
+        title = text("YouTube Music", 20, INK);
         title.setTypeface(ScenicTypography.font(activity,600));
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
-        heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        identity.addView(title);
+        address = text("https://music.youtube.com", 14, MUTED);
+        address.setSingleLine(true);
+        address.setEllipsize(TextUtils.TruncateAt.END);
+        identity.addView(address);
+        LinearLayout.LayoutParams identityParams = new LinearLayout.LayoutParams(0, -2, 1);
+        identityParams.setMarginEnd(dp(12));
+        heading.addView(identity, identityParams);
         sizeButton = button("작게 보기", () -> { if (minimized) expand(); else minimize(); });
+        sizeButton.setTextColor(PANEL);
+        sizeButton.setBackground(new RippleDrawable(ColorStateList.valueOf(0x24ffffff), surface(ACCENT, 12, 0), null));
         closeButton = button("재생 종료", this::close);
         heading.addView(sizeButton);
         LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(-2, -2);
         closeParams.setMarginStart(dp(8));
         heading.addView(closeButton, closeParams);
         root.addView(heading);
-        address = text("https://music.youtube.com", 14, MUTED);
-        address.setSingleLine(true);
-        address.setEllipsize(TextUtils.TruncateAt.END);
-        root.addView(address);
         controls = row();
         back = button("뒤로", this::goBack);
+        back.setContentDescription("음악 웹 화면 이전 페이지");
         addControl(controls, back, false);
-        Button selected = button("선택한 목록", () -> navigate(initialUrl));
-        selected.setContentDescription("AI가 선택한 플레이리스트로 돌아가기");
-        addControl(controls, selected, true);
-        addControl(controls, button("새로고침", () -> navigate(initialUrl)), true);
-        root.addView(controls);
+        selectedButton = button("선택한 목록", () -> navigate(initialUrl));
+        selectedButton.setContentDescription("AI가 선택한 플레이리스트로 돌아가기");
+        addControl(controls, selectedButton, true);
+        refreshButton = button("새로고침", () -> navigate(initialUrl));
+        refreshButton.setContentDescription("선택한 플레이리스트 새로고침");
+        addControl(controls, refreshButton, true);
+        LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-1, -2);
+        controlsParams.topMargin = dp(8);
+        controlsParams.bottomMargin = dp(8);
+        root.addView(controls, controlsParams);
         note = text("정차 중 사용 · 로그인은 외부 앱에서", 14, MUTED);
         root.addView(note);
         status = text("공식 웹사이트에 연결 중…", 14, MUTED);
-        status.setMaxLines(2);
+        status.setSingleLine(true);
         status.setEllipsize(TextUtils.TruncateAt.END);
-        root.addView(status);
+        status.setBackground(surface(SOFT, 12, 0));
+        status.setPadding(dp(12), dp(8), dp(12), dp(8));
+        status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(-1, -2);
+        statusParams.bottomMargin = dp(8);
+        root.addView(status, statusParams);
         progress = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
+        progress.setProgressTintList(ColorStateList.valueOf(ACCENT));
+        progress.setProgressBackgroundTintList(ColorStateList.valueOf(LINE));
         root.addView(progress, new LinearLayout.LayoutParams(-1, dp(3)));
         page = new FrameLayout(activity);
+        page.setBackground(surface(PANEL, 12, LINE));
+        page.setClipToOutline(true);
         root.addView(page, new LinearLayout.LayoutParams(-1, 0, 1));
         errorPanel = new ScrollView(activity);
         errorPanel.setFillViewport(true);
-        errorPanel.setBackgroundColor(Color.WHITE);
+        errorPanel.setBackgroundColor(PANEL);
         LinearLayout errorContent = column();
         errorContent.setGravity(Gravity.CENTER);
         errorContent.setPadding(dp(32), dp(24), dp(32), dp(24));
@@ -296,17 +318,18 @@ public final class MusicWebDialog {
         controls.setVisibility(metadataVisibility);
         note.setVisibility(metadataVisibility);
         status.setVisibility(metadataVisibility);
-        root.setPadding(dp(minimized ? 8 : 16), dp(8), dp(minimized ? 8 : 16), dp(8));
-        title.setText(minimized ? "YouTube Music" : "YouTube Music · 웹");
+        root.setPadding(dp(minimized ? 8 : 16), dp(minimized ? 8 : 12), dp(minimized ? 8 : 16), dp(minimized ? 8 : 12));
+        title.setText("YouTube Music");
         title.setTextSize(minimized ? 14 : 20);
         sizeButton.setText(minimized ? "크게 보기" : "작게 보기");
         sizeButton.setContentDescription(minimized ? "음악 창 크게 보기" : "음악을 재생하며 SCENIC 둘러보기");
         closeButton.setText(minimized ? "종료" : "재생 종료");
         closeButton.setContentDescription("음악 재생 종료");
-        for (Button button : new Button[] {sizeButton, closeButton}) {
+        selectedButton.setText(minimized ? "목록" : "선택한 목록");
+        for (Button button : new Button[] {back, selectedButton, refreshButton, sizeButton, closeButton}) {
             button.setTextSize(minimized ? 14 : 16);
-            button.setMinHeight(dp(minimized ? 48 : 56));
-            button.setMinimumHeight(dp(minimized ? 48 : 56));
+            button.setMinHeight(dp(56));
+            button.setMinimumHeight(dp(56));
             button.setPadding(dp(minimized ? 8 : 12), dp(8), dp(minimized ? 8 : 12), dp(8));
         }
     }
@@ -512,16 +535,22 @@ public final class MusicWebDialog {
     private LinearLayout column() { LinearLayout v = new LinearLayout(activity); v.setOrientation(LinearLayout.VERTICAL); return v; }
     private LinearLayout row() { LinearLayout v = new LinearLayout(activity); v.setOrientation(LinearLayout.HORIZONTAL); v.setGravity(Gravity.CENTER_VERTICAL); return v; }
     private TextView text(String message, int size, int color) {
-        TextView v = new TextView(activity); v.setTypeface(ScenicTypography.font(activity,400)); v.setText(message); v.setTextSize(size); v.setTextColor(color); v.setPadding(0, dp(4), 0, dp(4)); return v;
+        TextView v = new TextView(activity); v.setTypeface(ScenicTypography.font(activity,400)); v.setText(message); v.setTextSize(size); v.setTextColor(color); v.setIncludeFontPadding(false); v.setPadding(0, dp(4), 0, dp(4)); return v;
+    }
+    private GradientDrawable surface(int color, int radius, int border) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color); drawable.setCornerRadius(dp(radius));
+        if (border != 0) drawable.setStroke(dp(1), border);
+        return drawable;
     }
     private Button button(String label, Runnable action) {
         Button v = new Button(activity);
         v.setText(label); v.setTextSize(16); v.setAllCaps(false);
-        v.setMinWidth(0); v.setMinimumWidth(0); v.setMinHeight(dp(56));
+        v.setSingleLine(true); v.setEllipsize(TextUtils.TruncateAt.END); v.setIncludeFontPadding(false);
+        v.setMinWidth(dp(56)); v.setMinimumWidth(dp(56)); v.setMinHeight(dp(56)); v.setMinimumHeight(dp(56));
         v.setPadding(dp(12), dp(10), dp(12), dp(10));
         v.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},new int[]{MUTED,ACCENT}));
-        GradientDrawable surface = new GradientDrawable(); surface.setColor(SOFT); surface.setCornerRadius(dp(8));
-        v.setBackground(new RippleDrawable(ColorStateList.valueOf(0x1817191c), surface, null));
+        v.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656), surface(SOFT, 12, LINE), null));
         v.setTypeface(ScenicTypography.font(activity,600));
         v.setOnClickListener(clicked -> action.run()); return v;
     }

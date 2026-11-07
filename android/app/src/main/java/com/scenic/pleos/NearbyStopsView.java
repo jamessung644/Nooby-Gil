@@ -59,7 +59,7 @@ public final class NearbyStopsView {
         default void selectRestaurant(DestinationPlace place){}
         default void navigateToParking(DestinationPlace place,DestinationPlace restaurant){navigate(place,restaurant,true);}
     }
-    private static final int INK=0xff172925,MUTED=0xff65736e,LINE=0xffdbe3df,PANEL=0xffffffff,SOFT=0xffedf4ef,ACCENT=0xff24745a;
+    private static final int INK=0xff19332c,MUTED=0xff65766f,LINE=0xffdee7e1,PANEL=0xffffffff,SOFT=0xffeaf1ec,ACCENT=0xff2c6656;
     private final Activity activity;
     private final Host host;
     private final Handler handler=new Handler(Looper.getMainLooper());
@@ -170,73 +170,89 @@ public final class NearbyStopsView {
 
     private void render(){
         if(root==null)return;final int leftY=leftScroll==null?0:leftScroll.getScrollY(),rightY=rightScroll==null?0:rightScroll.getScrollY();leftScroll=null;rightScroll=null;root.removeAllViews();controls.clear();
-        LinearLayout header=row();header.addView(text("한 끼부터 주차까지",28,INK,true),new LinearLayout.LayoutParams(0,-2,1));
-        header.addView(badge("Kakao Local · 실제 검색"));root.addView(header,size(-1,-2));gap(root,8);
-        root.addView(text(anchor==null?"먼저 경로에서 목적지를 선택해 주세요.":anchor.name+" 주변 3km · "+(foodQuery.isEmpty()?"거리순 음식점":foodQuery+" · Kakao 검색 관련도순")+" · 평점 순위가 아닙니다",14,MUTED,false));gap(root,8);
-        safetyLabel=text("",13,MUTED,false);root.addView(safetyLabel);gap(root,10);
-        if(host.anchors().size()>1){root.addView(action("여정의 다른 장소 주변 찾기",false,this::chooseAnchor),size(-1,-2));gap(root,10);}
+        LinearLayout header=row();header.addView(text("맛집과 주차",28,INK,true),new LinearLayout.LayoutParams(0,-2,1));
+        header.addView(badge("주변 3km"));root.addView(header,size(-1,-2));gap(root,10);
+        LinearLayout context=wide?row():column();
+        TextView location=text(anchor==null?"경로에서 목적지를 먼저 선택해 주세요.":anchor.name+" 주변을 살펴보세요.",17,MUTED,false);
+        context.addView(location,wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));
+        if(host.anchors().size()>1){if(!wide)gap(context,10);context.addView(action("다른 장소 주변",false,this::chooseAnchor),wide?size(-2,-2):size(-1,-2));}
+        root.addView(context,size(-1,-2));gap(root,8);
+        safetyLabel=text("",14,MUTED,false);root.addView(safetyLabel);gap(root,24);
         if(baseUrl.isEmpty()){root.addView(text("설정에서 API 서버 주소를 확인해 주세요.",17,INK,false));return;}
         if(anchor==null)return;
         LinearLayout columns=new LinearLayout(activity);columns.setOrientation(wide?LinearLayout.HORIZONTAL:LinearLayout.VERTICAL);columns.setGravity(Gravity.TOP);
         LinearLayout left=column(),right=column();
-        if(wide){leftScroll=scroll(left);rightScroll=scroll(right);columns.addView(leftScroll,new LinearLayout.LayoutParams(0,-1,.46f));View spacer=new View(activity);columns.addView(spacer,size(22,1));columns.addView(rightScroll,new LinearLayout.LayoutParams(0,-1,.54f));root.addView(columns,new LinearLayout.LayoutParams(-1,0,1));}
-        else{columns.addView(left,size(-1,-2));gap(columns,18);columns.addView(right,size(-1,-2));leftScroll=scroll(columns);root.addView(leftScroll,new LinearLayout.LayoutParams(-1,0,1));}
-        LinearLayout listHeading=row();listHeading.addView(text("01  근처 음식점",19,INK,true),new LinearLayout.LayoutParams(0,-2,1));listHeading.addView(action("새로고침",false,()->load("restaurant")),size(112,-2));left.addView(listHeading);gap(left,12);
-        String[] hints=host.foodHints();if(hints!=null&&hints.length>0){left.addView(text("원하는 음식으로 좁혀보기",14,MUTED,false));gap(left,6);LinearLayout filters=row();filters.addView(action("전체",foodQuery.isEmpty(),()->chooseFood("")),new LinearLayout.LayoutParams(0,-2,1));int shown=0;for(String hint:hints){if(hint==null||hint.trim().isEmpty()||hint.length()>40||shown++>=3)continue;final String value=hint.trim();filters.addView(action(value,foodQuery.equals(value),()->chooseFood(value)),new LinearLayout.LayoutParams(0,-2,1));}left.addView(filters);gap(left,12);}
+        if(wide){leftScroll=scroll(left);rightScroll=scroll(right);columns.addView(leftScroll,new LinearLayout.LayoutParams(0,-1,.46f));View spacer=new View(activity);columns.addView(spacer,size(24,1));columns.addView(rightScroll,new LinearLayout.LayoutParams(0,-1,.54f));root.addView(columns,new LinearLayout.LayoutParams(-1,0,1));}
+        else{columns.addView(left,size(-1,-2));gap(columns,24);columns.addView(right,size(-1,-2));leftScroll=scroll(columns);root.addView(leftScroll,new LinearLayout.LayoutParams(-1,0,1));}
+        LinearLayout listHeading=row();listHeading.addView(text("근처 음식점",22,INK,true),new LinearLayout.LayoutParams(0,-2,1));listHeading.addView(action("새로고침",false,()->load("restaurant")),size(112,-2));left.addView(listHeading);gap(left,10);
+        left.addView(text("Kakao 장소 검색 · "+(foodQuery.isEmpty()?"가까운 순":foodQuery+" 관련도순")+" · 평점순 아님",14,MUTED,false));gap(left,16);
+        String[] hints=host.foodHints();if(hints!=null&&hints.length>0){
+            LinearLayout filters=row();filters.addView(action("전체",foodQuery.isEmpty(),()->chooseFood("")),new LinearLayout.LayoutParams(0,-2,1));int shown=0;
+            for(String hint:hints){if(hint==null||hint.trim().isEmpty()||hint.length()>40||shown++>=3)continue;final String value=hint.trim();space(filters,8);filters.addView(action(value,foodQuery.equals(value),()->chooseFood(value)),new LinearLayout.LayoutParams(0,-2,1));}
+            left.addView(filters);gap(left,16);
+        }
         if(loading&&"restaurant".equals(pendingKind))loading(left,"근처 음식점을 찾고 있어요…");
         if(!error.isEmpty()&&"restaurant".equals(pendingKind))failure(left);
-        if(restaurantsLoaded&&restaurants.isEmpty())left.addView(text(foodQuery.isEmpty()?"반경 3km에서 음식점을 찾지 못했어요. 다른 장소 주변을 살펴보세요.":"반경 3km에서 '"+foodQuery+"' 검색 결과가 없어요. 전체 음식점 또는 다른 음식을 선택해 주세요.",16,MUTED,false));
+        if(restaurantsLoaded&&restaurants.isEmpty())left.addView(text(foodQuery.isEmpty()?"주변 3km에서 음식점을 찾지 못했어요. 다른 장소 주변을 살펴보세요.":"'"+foodQuery+"' 검색 결과가 없어요. 전체 음식점이나 다른 음식을 선택해 주세요.",17,MUTED,false));
         for(Place place:restaurants){
             boolean selected=selectedRestaurant!=null&&selectedRestaurant.destination.id.equals(place.destination.id);
-            LinearLayout card=card(selected?SOFT:PANEL);card.addView(badge((selected?"선택한 음식점 · ":"")+distance(place.distance)));
-            gap(card,9);card.addView(text(place.destination.name,21,INK,true));gap(card,8);card.addView(text(place.destination.address,14,MUTED,false));gap(card,13);
-            if(!place.category.isEmpty()){card.addView(text(place.category,13,MUTED,false));gap(card,6);}if(!place.phone.isEmpty()){card.addView(text("전화 · "+place.phone,13,MUTED,false));gap(card,6);}
-            card.addView(action(selected?"선택됨 · 주차 다시 찾기":"이 식당 선택 · 주차 자동 찾기",selected,()->selectRestaurant(place)),size(-1,-2));left.addView(card,size(-1,-2));gap(left,12);
+            LinearLayout card=card(selected?SOFT:PANEL),title=row();
+            title.addView(text(place.destination.name,22,INK,true),new LinearLayout.LayoutParams(0,-2,1));space(title,12);title.addView(badge(distance(place.distance)));card.addView(title);gap(card,10);
+            if(!place.category.isEmpty()){card.addView(text(place.category,14,MUTED,false));gap(card,6);}
+            card.addView(text(place.destination.address,15,MUTED,false));
+            if(!place.phone.isEmpty()){gap(card,6);card.addView(text(place.phone,14,MUTED,false));}gap(card,16);
+            card.addView(action(selected?"선택됨 · 주차 다시 찾기":"이 식당 선택 · 주차 찾기",selected,()->selectRestaurant(place)),size(-1,-2));left.addView(card,size(-1,-2));gap(left,16);
         }
-        LinearLayout selection=card(PANEL);right.addView(selection,size(-1,-2));selection.addView(text("02  도착하기 전에",19,INK,true));gap(selection,14);
+        LinearLayout selection=card(PANEL);right.addView(selection,size(-1,-2));
         if(selectedRestaurant==null){
-            selection.addView(text("마음에 드는 식당을 고르면\n주차까지 이어서 확인해요.",25,INK,true));gap(selection,14);
-            selection.addView(text("식당 선택 즉시 주변 주차장을 조회합니다.\n안내는 주차장 버튼을 눌렀을 때 시작해요.",16,MUTED,false));gap(selection,18);
-            selection.addView(action("목적지 주변 주차장 먼저 찾기",true,()->load("parking")),size(-1,-2));
+            selection.addView(text("식사 다음은, 편하게 주차",22,INK,true));gap(selection,10);
+            selection.addView(text("식당을 고르면 주변 주차장을 찾아드려요.\n주차장부터 둘러봐도 좋아요.",17,MUTED,false));gap(selection,20);
+            selection.addView(action("목적지 주변 주차장 찾기",true,()->load("parking")),size(-1,-2));
         }else{
-            selection.addView(text(selectedRestaurant.destination.name,25,INK,true));gap(selection,8);selection.addView(text(selectedRestaurant.destination.address,15,MUTED,false));gap(selection,18);
-            ParkingEvidenceStore.Evidence observed=evidence.get(selectedRestaurant.destination.id);String decision=observed==null?"unknown":observed.decision(System.currentTimeMillis());
-            selection.addView(badge("식당 자체 주차 · "+("available".equals(decision)?"가능으로 기록":"unavailable".equals(decision)?"불가로 기록":"확인 필요")));gap(selection,8);
-            selection.addView(text(observed==null?"확인된 근거가 없어요. 장소 정보·리뷰 또는 식당에 확인한 내용을 기록할 수 있어요.":observed.source+" · "+new SimpleDateFormat("yyyy.MM.dd HH:mm",Locale.KOREA).format(new Date(observed.checkedAt))+"\n"+observed.note+(observed.recent(System.currentTimeMillis())?"":"\n30일이 지났거나 확인 시점이 유효하지 않아 재확인이 필요해요."),14,MUTED,false));gap(selection,8);
-            selection.addView(text("내가 남긴 확인 메모이며 현재 빈자리·영업 여부를 보장하지 않습니다.",12,MUTED,false));gap(selection,12);
-            selection.addView(action("주차 확인 내용 기록",false,this::editEvidence),size(-1,-2));gap(selection,8);
-            selection.addView(action("이 식당으로 경로 보기",true,()->navigate(selectedRestaurant,false)),size(-1,-2));gap(selection,8);
-            selection.addView(action("주차장 다시 조회",!"available".equals(decision),()->load("parking")),size(-1,-2));gap(selection,8);
-            selection.addView(action("장소 정보 · 리뷰 열기",false,()->openDetails(selectedRestaurant)),size(-1,-2));
+            selection.addView(text("선택한 식당",14,ACCENT,true));gap(selection,8);
+            selection.addView(text(selectedRestaurant.destination.name,22,INK,true));gap(selection,8);selection.addView(text(selectedRestaurant.destination.address,15,MUTED,false));gap(selection,16);
+            actionPair(selection,action("식당 경로 보기",false,()->navigate(selectedRestaurant,false)),action("주차 새로고침",true,()->load("parking")));gap(selection,10);
+            actionPair(selection,action("장소 정보·리뷰",false,()->openDetails(selectedRestaurant)),action("주차 확인 메모",false,this::editEvidence));
         }
-        gap(right,18);
+        gap(right,24);
         if(loading&&"parking".equals(pendingKind))loading(right,navigationMessage.isEmpty()?"선택한 장소 주변 주차장을 찾고 있어요…":navigationMessage);
-        else if(!navigationMessage.isEmpty()){right.addView(text(navigationMessage,16,INK,true));gap(right,12);}
+        else if(!navigationMessage.isEmpty()){right.addView(text(navigationMessage,17,INK,true));gap(right,16);}
         if(!error.isEmpty()&&"parking".equals(pendingKind))failure(right);
         if(parkingLoaded){
-            right.addView(text("03  빈자리 우선 · 주변 주차장",19,INK,true));gap(right,6);
-            right.addView(text((selectedRestaurant==null?anchor.name:selectedRestaurant.destination.name)+" 주변 · 최신 빈자리 확인 → 미확인 → 만차 순\n45초마다 갱신 · 안내 직전에 다시 확인합니다",13,MUTED,false));gap(right,12);
-            if(parkings.isEmpty())right.addView(text("반경 3km에서 등록된 주차장을 찾지 못했어요. 식당에 주차 가능 여부를 확인해 주세요.",16,MUTED,false));
+            right.addView(text("빈자리부터 살펴보세요",22,INK,true));gap(right,8);
+            right.addView(text("빈자리 확인 → 미확인 → 만차 순\n45초마다 갱신 · 안내 전에 다시 확인",14,MUTED,false));gap(right,16);
+            if(parkings.isEmpty())right.addView(text("주변 3km에서 등록된 주차장을 찾지 못했어요. 식당에 주차 가능 여부를 확인해 주세요.",17,MUTED,false));
             final long now=SystemClock.elapsedRealtime();parkings.sort((a,b)->Integer.compare(parkingPriority(a,now),parkingPriority(b,now)));
-            if(!parkings.isEmpty()&&firstAvailable(parkings,now)==null){right.addView(text("현재 빈자리가 확인된 곳이 없어요. 미확인 주차장은 이용 가능 여부를 확인한 뒤 선택해 주세요.",14,MUTED,false));gap(right,12);}
+            if(!parkings.isEmpty()&&firstAvailable(parkings,now)==null){right.addView(text("현재 빈자리가 확인된 곳이 없어요. 미확인 장소는 이용 가능 여부를 먼저 확인해 주세요.",15,MUTED,false));gap(right,16);}
             for(int index=0;index<parkings.size();index++){
                 Place place=parkings.get(index);boolean excluded=excludedParkingIds.contains(place.destination.id),recommended=index==0&&!excluded&&place.availability.isAvailable(now);
-                LinearLayout card=card(recommended?SOFT:PANEL);card.addView(badge(parkingLabel(place,recommended)));gap(card,8);
-                card.addView(text(place.destination.name,20,INK,true));gap(card,7);card.addView(text(place.destination.address,14,MUTED,false));gap(card,7);
-                if(!place.phone.isEmpty()){card.addView(text("전화 · "+place.phone,13,MUTED,false));gap(card,6);}
-                card.addView(text(inventoryDescription(place,now),16,INK,true));gap(card,7);
-                if(!place.availability.source.isEmpty()){card.addView(text(inventorySource(place),12,MUTED,false));gap(card,7);}
-                card.addView(text(publicParkingLabel(place)?"공영·공공 표기 · 요금·운영시간·입차 조건은 별도 확인":"시설 전용일 수 있음 · 이용조건 확인 필요",13,MUTED,false));gap(card,7);
-                if(excluded){card.addView(text("직접 만차·입차 불가로 제외한 곳입니다.",14,INK,true));}
-                else{card.addView(text(place.availability.isSnapshot()?"제공처 갱신 시각이 없어 주행 중 자동 변경은 보류합니다. 안내 전 재조회하며 도착 전 잔여면은 달라질 수 있어요.":"도착 전 잔여면은 달라질 수 있어요. 만차가 확인되면 빈자리 있는 다른 주차장을 찾습니다.",13,MUTED,false));gap(card,13);
-                    card.addView(action(place.availability.isFull(now)?"빈자리 있는 다른 주차장 찾기":recommended?"빈자리 확인 · 추천 주차장 안내":place.availability.isAvailable(now)?"이 주차장까지 안내":"빈자리 미확인 · 위치로 안내",true,()->navigate(place,true)),size(-1,-2));}
-                gap(card,7);
-                card.addView(action("주차장 정보 열기",false,()->openDetails(place)),size(-1,-2));right.addView(card,size(-1,-2));gap(right,10);
-                if(!place.availability.sourceUrl.isEmpty()){card.addView(action("실시간 정보 출처",false,()->openInventorySource(place)),size(-1,-2));}
+                LinearLayout card=card(recommended?SOFT:PANEL);card.addView(badge(parkingLabel(place,recommended)));gap(card,12);
+                card.addView(text(inventoryDescription(place,now),place.availability.isAvailable(now)?26:22,place.availability.isAvailable(now)?ACCENT:INK,true));gap(card,12);
+                card.addView(text(place.destination.name,22,INK,true));gap(card,8);card.addView(text(place.destination.address,15,MUTED,false));
+                if(!place.phone.isEmpty()){gap(card,6);card.addView(text(place.phone,14,MUTED,false));}gap(card,12);
+                if(!place.availability.source.isEmpty()){card.addView(text(inventorySource(place),14,MUTED,false));gap(card,10);}
+                card.addView(text(publicParkingLabel(place)?"요금·운영시간·입차 조건은 장소 정보에서 확인":"시설 전용일 수 있어요. 이용조건을 확인해 주세요.",14,MUTED,false));gap(card,10);
+                if(excluded){card.addView(text("만차·입차 불가로 직접 제외한 곳",15,INK,true));}
+                else{card.addView(text(place.availability.isSnapshot()?"갱신 시각 미제공 · 주행 중 자동 변경 보류\n안내 전 재조회하며, 도착 전 잔여면은 달라질 수 있어요.":"도착 전 잔여면은 달라질 수 있어요. 만차가 확인되면 다른 빈자리 주차장을 찾습니다.",14,MUTED,false));gap(card,16);
+                    card.addView(action(place.availability.isFull(now)?"빈자리 있는 다른 주차장":recommended?"추천 주차장으로 안내":place.availability.isAvailable(now)?"이 주차장으로 안내":"빈자리 미확인 · 위치 안내",recommended||place.availability.isAvailable(now),()->navigate(place,true)),size(-1,-2));}
+                gap(card,10);
+                if(!place.availability.sourceUrl.isEmpty())actionPair(card,action("주차장 정보",false,()->openDetails(place)),action("실시간 정보 출처",false,()->openInventorySource(place)));
+                else card.addView(action("주차장 정보",false,()->openDetails(place)),size(-1,-2));
+                right.addView(card,size(-1,-2));gap(right,16);
             }
         }
+        if(selectedRestaurant!=null){gap(right,8);right.addView(evidenceCard(),size(-1,-2));gap(right,24);}
         updateSafety();
         final ScrollView restoreLeft=leftScroll,restoreRight=rightScroll;if(restoreLeft!=null)restoreLeft.post(()->restoreLeft.scrollTo(0,leftY));if(restoreRight!=null)restoreRight.post(()->restoreRight.scrollTo(0,rightY));
+    }
+    private LinearLayout evidenceCard(){
+        LinearLayout card=card(PANEL);ParkingEvidenceStore.Evidence observed=evidence.get(selectedRestaurant.destination.id);
+        String decision=observed==null?"unknown":observed.decision(System.currentTimeMillis());
+        card.addView(text("식당 자체 주차 메모",22,INK,true));gap(card,12);
+        card.addView(badge("available".equals(decision)?"가능으로 기록":"unavailable".equals(decision)?"불가로 기록":"확인 필요"));gap(card,12);
+        card.addView(text(observed==null?"방문·전화·리뷰에서 확인한 주차 정보를 남겨보세요.":observed.source+" · "+new SimpleDateFormat("yyyy.MM.dd HH:mm",Locale.KOREA).format(new Date(observed.checkedAt))+"\n"+observed.note+(observed.recent(System.currentTimeMillis())?"":"\n30일이 지났거나 확인 시점이 유효하지 않아 재확인이 필요해요."),15,MUTED,false));gap(card,10);
+        card.addView(text("개인 확인 메모이며 현재 빈자리·영업 여부를 보장하지 않습니다.",14,MUTED,false));gap(card,16);
+        card.addView(action(observed==null?"주차 확인 내용 기록":"메모 수정·삭제",false,this::editEvidence),size(-1,-2));return card;
     }
     private void chooseFood(String query){if(!allowed())return;foodQuery=query;restaurants.clear();restaurantsLoaded=false;load("restaurant");}
     private void selectRestaurant(Place place){if(!allowed())return;cancel();if(selectedRestaurant==null||!samePlace(place.destination,selectedRestaurant.destination))excludedParkingIds.clear();selectedRestaurant=place;host.selectRestaurant(place.destination);parkings.clear();parkingLoaded=false;error="";navigationMessage="";pendingKind="parking";if(rightScroll!=null)rightScroll.scrollTo(0,0);load("parking");}
@@ -298,11 +314,13 @@ public final class NearbyStopsView {
     private LinearLayout card(int color){LinearLayout v=column();v.setPadding(dp(20),dp(20),dp(20),dp(20));v.setBackground(background(color,LINE));return v;}
     private ScrollView scroll(View child){ScrollView s=new ScrollView(activity);s.setFillViewport(true);s.setVerticalScrollBarEnabled(false);s.addView(child,new ScrollView.LayoutParams(-1,-2));return s;}
     private void gap(LinearLayout v,int height){v.addView(new View(activity),size(1,height));}
+    private void space(LinearLayout v,int width){v.addView(new View(activity),size(width,1));}
+    private void actionPair(LinearLayout parent,View first,View second){LinearLayout actions=row();actions.addView(first,new LinearLayout.LayoutParams(0,-2,1));space(actions,10);actions.addView(second,new LinearLayout.LayoutParams(0,-2,1));parent.addView(actions,size(-1,-2));}
     private LinearLayout.LayoutParams size(int width,int height){return new LinearLayout.LayoutParams(width<0?width:dp(width),height<0?height:dp(height));}
-    private GradientDrawable background(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(14));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
+    private GradientDrawable background(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(16));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
     private TextView text(String value,int sp,int color,boolean bold){TextView t=new TextView(activity);t.setText(value);t.setTextSize(sp);t.setTextColor(color);t.setTypeface(ScenicTypography.font(activity,bold?600:400));t.setIncludeFontPadding(false);t.setLineSpacing(dp(4),1);return t;}
-    private TextView badge(String label){TextView t=text(label,13,ACCENT,true);t.setPadding(dp(10),dp(7),dp(10),dp(7));t.setBackground(background(SOFT,0));return t;}
-    private TextView action(String label,boolean primary,Runnable click){TextView t=text(label,16,primary?PANEL:INK,true);t.setGravity(Gravity.CENTER);t.setPadding(dp(14),dp(12),dp(14),dp(12));t.setMinHeight(dp(56));t.setBackground(new RippleDrawable(ColorStateList.valueOf(0x2224745a),background(primary?ACCENT:PANEL,primary?0:LINE),null));t.setFocusable(true);t.setClickable(true);t.setContentDescription(label);t.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View host,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(host,info);info.setClassName(Button.class.getName());}});t.setOnClickListener(v->{if(allowed())click.run();});controls.add(t);return t;}
+    private TextView badge(String label){TextView t=text(label,14,ACCENT,true);t.setPadding(dp(10),dp(7),dp(10),dp(7));t.setBackground(background(SOFT,0));return t;}
+    private TextView action(String label,boolean primary,Runnable click){TextView t=text(label,16,primary?PANEL:INK,true);t.setGravity(Gravity.CENTER);t.setPadding(dp(14),dp(12),dp(14),dp(12));t.setMinHeight(dp(56));GradientDrawable surface=background(primary?ACCENT:PANEL,primary?0:LINE);surface.setCornerRadius(dp(12));t.setBackground(new RippleDrawable(ColorStateList.valueOf(0x222c6656),surface,null));t.setFocusable(true);t.setClickable(true);t.setContentDescription(label);t.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View host,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(host,info);info.setClassName(Button.class.getName());}});t.setOnClickListener(v->{if(allowed())click.run();});controls.add(t);return t;}
     private static final class Place {final DestinationPlace destination;final int distance;final String category,phone;final ParkingAvailability availability;Place(DestinationPlace destination,int distance){this(destination,distance,"","",ParkingAvailability.unknown(SystemClock.elapsedRealtime()));}Place(DestinationPlace destination,int distance,String category,String phone,ParkingAvailability availability){this.destination=destination;this.distance=distance;this.category=category;this.phone=phone;this.availability=availability;}}
     private static final class PlacesResponse {final List<Place> places;final Place focus;PlacesResponse(List<Place> places,Place focus){this.places=places;this.focus=focus;}}
     private static final class PlaceFailure extends Exception {PlaceFailure(String message){super(message);}}
