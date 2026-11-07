@@ -255,6 +255,13 @@ public final class DestinationRoutesTest {
         rejectRequest(()->client.destinationRoutes(LAT,LON,publicPlace,121,"all"),"Bound detour budget");
         for(String theme:new String[]{null,"","sea","lake","night","Mountain","water ","unknown"})
             rejectRequest(()->client.destinationRoutes(LAT,LON,publicPlace,30,theme),"Require backend canonical theme before connecting");
+        Connection parkingRequest=enqueue(new JSONObject().put("places",new JSONArray()).toString());
+        client.nearbyParking(publicPlace,"2029879158");
+        check(parkingRequest.getURL().getPath().equals("/api/nearby")&&parkingRequest.getRequestMethod().equals("GET"),"Parking watch uses nearby GET");
+        check(parkingRequest.getURL().getQuery().contains("focusId=2029879158")&&parkingRequest.getURL().getQuery().contains("kind=parking"),"Focused lot is kept even when full and outside ten results");
+        check(parkingRequest.getReadTimeout()==30000,"Parking provider bounded timeout");
+        rejectRequest(()->client.nearbyParking(null,"123"),"Parking watch needs chosen anchor");
+        rejectRequest(()->client.nearbyParking(publicPlace,"1&lat=0"),"Parking watch ID cannot inject query");
         check(connections.isEmpty(),"No hidden retries or secondary requests");
         System.out.println("DestinationRoutesTest: "+checks+" checks passed");
     }

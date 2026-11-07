@@ -75,6 +75,10 @@ public final class ScenicPhotoCollectionTest {
             check(!ScenicPhotoCollection.safeImageUrl(url),"Reject unsafe image URL");reject(v->photo(v).put("thumbnailUrl",url),"Reject unsafe thumbnail");
         }
         check(ScenicPhotoCollection.safeImageUrl("https://tong.visitkorea.or.kr/cms/resource/11/test_01.jpg"),"Allow official HTTPS JPEG");
+        check(ScenicPhotoCollection.safeImageUrl("https://tong.visitkorea.or.kr/cms/resource_photo/50/4118550_image2_1.jpg"),"Allow current official photo gallery path");
+        JSONObject modernPhoto=response();photo(modernPhoto).put("imageUrl","https://tong.visitkorea.or.kr/cms/resource_photo/50/4118550_image2_1.jpg");
+        check(ScenicPhotoCollection.parse(modernPhoto,destination,10000).photos.size()==1,"Parse current official gallery photo");
+        for(String url:new String[]{"https://tong.visitkorea.or.kr/cms/resource_photos/a.jpg","https://tong.visitkorea.or.kr/cms/resource_photo/a.jpg?redirect=evil","https://tong.visitkorea.or.kr/cms/resource_photo/%2e%2e/a.jpg","https://elsewhere.example/cms/resource_photo/a.jpg"})check(!ScenicPhotoCollection.safeImageUrl(url),"Retain strict gallery host/path controls");
         for(String type:new String[]{"image/jpeg","image/jpg","IMAGE/JPG; charset=binary","image/png","image/webp"})check(ScenicPhotoCollection.safeImageContentType(type),"Accept official image MIME "+type);
         for(String type:new String[]{null,"","text/html","image/jpeg-redirect","application/octet-stream"})check(!ScenicPhotoCollection.safeImageContentType(type),"Reject non-image MIME");
         for(String token:new String[]{"",TOKEN+"?",TOKEN+".","prefix."+TOKEN,new String(new char[4097]).replace('\0','a')})check(!ScenicPhotoCollection.validSelectionToken(token),"Reject malformed/oversized token");

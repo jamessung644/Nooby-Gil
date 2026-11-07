@@ -70,9 +70,12 @@ function Find-Node {
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath $candidate)) { continue }
         $version = Invoke-Native $candidate @('--version') 10
-        if ($version.ExitCode -eq 0 -and $version.Output -match '^v(\d+)\.' -and [int]$Matches[1] -ge 22) { return $candidate }
+        if ($version.ExitCode -eq 0 -and $version.Output -match '^v(\d+)\.(\d+)\.') {
+            $major = [int]$Matches[1]; $minor = [int]$Matches[2]
+            if (($major -eq 22 -and $minor -ge 19) -or ($major -eq 24 -and $minor -ge 6) -or $major -gt 24) { return $candidate }
+        }
     }
-    throw 'Node.js 22 or later was not found. Install Node.js, reopen this launcher, and try again.'
+    throw 'Node.js 22.19+ or 24.6+ was not found. Install a current Node.js LTS release, reopen this launcher, and try again.'
 }
 
 function Find-AndroidSdk {
@@ -125,7 +128,8 @@ function Start-LocalServer([string]$Node, [int]$Port) {
     try {
         # Match the .env port even if this shell inherited a different PORT value.
         $env:PORT = [string]$Port
-        $arguments = Join-NativeArguments @("--env-file-if-exists=$envFile", $serverFile)
+        # Trust the operating system's CA store while retaining certificate and hostname validation.
+        $arguments = Join-NativeArguments @('--use-system-ca', "--env-file-if-exists=$envFile", $serverFile)
         $child = Start-Process -FilePath $Node -ArgumentList $arguments -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     } finally { $env:PORT = $previousPort }
     $ready = $false

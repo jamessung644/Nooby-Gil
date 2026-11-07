@@ -91,8 +91,8 @@ async function testFiles(directory) {
 const domainClasses = [
   'ApiRequestGate', 'CheckpointTracker', 'CourseEngine', 'RouteCheckpoint', 'DestinationPlace', 'DestinationRoutePlan',
   'EndpointPolicy', 'DriveRegion', 'JourneyState', 'LivePlan', 'LivePlanOrigin', 'LocationFixPolicy',
-  'MusicContext', 'MusicPlaylist', 'MusicRecommendationState', 'NationwideCatalog',
-  'NavigationHandoffPlan', 'ParkingEvidenceStore', 'PersonalVideoStore', 'RouteProjection',
+  'MusicContext', 'MusicPlaylist', 'MusicRecommendationState', 'MusicWebPolicy', 'MusicWindowLayout', 'NationwideCatalog',
+  'NavigationHandoffPlan', 'ParkingAvailability', 'ParkingEvidenceStore', 'ParkingReroutePolicy', 'PersonalVideoStore', 'RouteProjection',
   'ScenicApiClient', 'ScenicCaptureStore', 'ScenicEvidence', 'ScenicLayoutPolicy', 'ScenicPhotoCollection',
   'StrictJson', 'VehicleSafety',
 ];
@@ -100,6 +100,7 @@ const sourceDirectory = join(root, 'android', 'app', 'src', 'main', 'java', 'com
 const tests = (await Promise.all([
   testFiles(join(root, 'android', 'tests')),
   testFiles(join(root, 'tests', 'api-client')),
+  testFiles(join(root, 'tests', 'music-web')),
   testFiles(join(root, 'android', 'app', 'src', 'test', 'java')),
 ])).flat().sort();
 if (!tests.length) throw new Error('No Java tests were discovered.');

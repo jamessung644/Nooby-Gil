@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
+import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { createServer } from '../server/index.mjs';
 import { createScenicSelectionSigner, findScenicPhotos as findPhotos, safeTourPhotoUrl } from '../server/scenic-photos.mjs';
 import { planDestinationRoutes } from '../server/destination-routes.mjs';
@@ -369,4 +371,83 @@ test('overall deadline prevents late detail and AI calls instead of extending th
     assert.equal(calls, 1); assert.deepEqual(result.photos, []);
     assert.match(result.ranking.message, /일부 장소/);
   } finally { Date.now = originalNow; }
+});
+
+test('new official resource_photo images keep the same strict host and path policy', () => {
+  const official = 'https://tong.visitkorea.or.kr/cms/resource_photo/50/4118550_image2_1.jpg';
+  assert.equal(safeTourPhotoUrl(official.replace('https:', 'http:')), official);
+  for (const bad of [official + '?token=x', official.replace('resource_photo', 'resource_photos'), official.replace('/50/', '/%2e%2e/'), official.replace('tong.visitkorea.or.kr', 'elsewhere.example')]) assert.equal(safeTourPhotoUrl(bad), null);
+});
+
+const curatedCatalog = preferred => ({ places: [{ id: '123', title: '광안리해수욕장', lat: 35.153, lon: 129.118,
+  curated: true, preferredImage: { serial: 'chosen-1', imageUrl: image('old-saved'), ...preferred } }] });
+const galleryImage = extra => ({ contentid: '123', serialnum: 'chosen-1', cpyrhtDivCd: 'Type1',
+  originimgurl: image('gallery-current'), smallimageurl: image('gallery-small'), ...extra });
+
+test('selected gallery image needs current per-image license and is the actual image sent to AI', async () => {
+  const result = await findScenicPhotos(input, { env, catalog: curatedCatalog(), fetchImpl: async (url, options) => {
+    const target = new URL(url);
+    if (target.pathname.endsWith('/locationBasedList2')) return tour([item()]);
+    if (target.pathname.endsWith('/detailImage2')) {
+      assert.equal(target.searchParams.get('contentId'), '123'); assert.equal(target.searchParams.get('numOfRows'), '30');
+      assert.ok(!target.searchParams.has('subImageYN')); return tour([galleryImage()]);
+    }
+    const body = JSON.parse(options.body);
+    assert.equal(body.input[0].content[1].image_url, image('gallery-small'));
+    return ai([row()]);
+  } });
+  assert.equal(result.photos[0].imageUrl, image('gallery-current'));
+  assert.equal(result.photos[0].place.id, 'tour-123');
+  assert.ok(!JSON.stringify(result).includes('old-saved'));
+});
+
+test('gallery identity, changed license, unsafe URL and missing selection never publish a saved image', async () => {
+  for (const rows of [[galleryImage({ cpyrhtDivCd: 'Type3' })], [galleryImage({ contentid: '999' })],
+    [galleryImage({ serialnum: 'other' })], [galleryImage({ originimgurl: 'https://evil.example/a.jpg' })], [], [galleryImage(), galleryImage()]]) {
+    const result = await findScenicPhotos(input, { env: { TOUR_API_KEY: 'x' }, catalog: curatedCatalog(), fetchImpl: async url =>
+      new URL(url).pathname.endsWith('/locationBasedList2') ? tour([item()]) : tour(rows) });
+    assert.equal(result.photos[0].imageUrl, image('123'));
+    assert.match(result.ranking.message, /선별 사진은 갱신하지 못해/);
+    assert.ok(!JSON.stringify(result).includes('old-saved'));
+  }
+});
+
+test('curated missing place is refreshed even when location search has six ordinary photos', async () => {
+  const catalog = { places: [{ id: '2000', title: '경포호', lat: 35.153, lon: 129.118, curated: true }] }, calls = [];
+  const result = await findScenicPhotos(input, { env: { TOUR_API_KEY: 'x' }, catalog, fetchImpl: async url => {
+    const target = new URL(url); calls.push(target.pathname);
+    return target.pathname.endsWith('/locationBasedList2') ? tour(Array.from({ length: 6 }, (_, i) => item(String(i + 1)))) : tour([item('2000', { title: '최신 호수 사진' })]);
+  } });
+  assert.ok(calls.some(path => path.endsWith('/detailCommon2')));
+  assert.ok(result.photos.some(photo => photo.place.id === 'tour-2000' && photo.place.name === '최신 호수 사진'));
+});
+
+test('gallery enrichment stays bounded to four places and two concurrent calls', async () => {
+  const catalog = { places: Array.from({ length: 8 }, (_, i) => ({ id: String(i + 1), title: '해변', lat: 35.153, lon: 129.118,
+    curated: true, preferredImage: { serial: 'chosen-1' } })) };
+  let calls = 0, active = 0, maximum = 0;
+  const result = await findScenicPhotos(input, { env: { TOUR_API_KEY: 'x' }, catalog, fetchImpl: async url => {
+    const target = new URL(url);
+    if (target.pathname.endsWith('/locationBasedList2')) return tour(catalog.places.map(p => item(p.id)));
+    assert.ok(target.pathname.endsWith('/detailImage2')); calls++; active++; maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, 2)); active--;
+    return tour([galleryImage({ contentid: target.searchParams.get('contentId') })]);
+  } });
+  assert.equal(calls, 4); assert.equal(maximum, 2); assert.equal(result.photos.length, 8);
+});
+
+test('eight bundled regional photos are licensed, attributed, diverse and match their manifest hashes', async () => {
+  const base = new URL('../android/app/src/main/assets/scenic-regions/', import.meta.url);
+  const manifest = JSON.parse(await readFile(new URL('manifest.json', base), 'utf8'));
+  assert.equal(manifest.photos.length, 8);
+  assert.equal(new Set(manifest.photos.map(photo => photo.regionId)).size, 8);
+  assert.equal(new Set(manifest.photos.map(photo => photo.sha256)).size, 8);
+  for (const photo of manifest.photos) {
+    assert.match(photo.license, /제1유형/); assert.equal(photo.sourceName, '한국관광공사 TourAPI');
+    assert.equal(photo.file, photo.regionId + '.jpg'); assert.ok(safeTourPhotoUrl(photo.originalUrl));
+    assert.ok(photo.width >= 500 && photo.width <= 960 && photo.height <= 720);
+    const bytes = await readFile(new URL(photo.file, base)); assert.ok(bytes.length < 300000);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), photo.sha256);
+    assert.equal(bytes.readUInt16BE(0), 0xffd8);
+  }
 });

@@ -75,7 +75,7 @@ public final class RecapExperience {
         default String journeyId(){return "";}
         default String journeyTitle(){return "선택한 여정";}
     }
-    private static final int INK=0xff1c2924,MUTED=0xff6f7771,LINE=0xffe0e5df,SOFT=0xfff3f6f0,WHITE=0xffffffff,GREEN=0xff355947;
+    private static final int INK=0xff19332c,MUTED=0xff65766f,LINE=0xffdee7e1,SOFT=0xffeaf1ec,WHITE=0xffffffff,GREEN=0xff2c6656;
     private static final int MAX_FRAMES=6;
     private final Activity activity;
     private final Host host;
@@ -117,7 +117,7 @@ public final class RecapExperience {
     public View createView(boolean wide) {
         if(destroyed)throw new IllegalStateException("Recap experience was destroyed");
         this.wide=wide;active=true;stopPlayback();applyPendingVoice();
-        panel=column();panel.setPadding(dp(24),dp(20),dp(24),dp(28));panel.setBackgroundColor(WHITE);
+        panel=column();panel.setPadding(dp(24),dp(24),dp(24),dp(28));panel.setBackground(background(WHITE,LINE,16));
         if(wide){ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);scroll.addView(panel,new ScrollView.LayoutParams(-1,-2));root=scroll;}else root=panel;
         final View mounted=root;
         root.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener(){
@@ -301,22 +301,22 @@ public final class RecapExperience {
         if(!busy&&!saving)restoreExport();
         TextView eyebrow=text("MONTHLY RECAP",12,GREEN,true);eyebrow.setLetterSpacing(.13f);panel.addView(eyebrow);gap(panel,8);
         panel.addView(text("이번 달을 한 편으로",28,INK,true));gap(panel,7);
-        panel.addView(text("좋아한 풍경에 음악과 한 줄의 기억을 더해요.",15,MUTED,false));gap(panel,22);
+        panel.addView(text("좋아한 풍경에 음악과 한 줄의 기억을 더해요.",15,MUTED,false));gap(panel,24);
         LinearLayout selector=row();selector.setGravity(Gravity.CENTER_VERTICAL);
         List<String> months=months();int index=months.indexOf(month);
-        TextView previous=button("‹",false,()->selectAdjacent(1));previous.setContentDescription("이전 달 선택");previous.setTextSize(28);selector.addView(previous,size(52,52));
-        TextView monthButton=button(monthLabel(month)+"  ▾",false,this::showMonths);LinearLayout.LayoutParams monthParams=new LinearLayout.LayoutParams(0,dp(52),1);monthParams.setMargins(dp(10),0,dp(10),0);selector.addView(monthButton,monthParams);
-        TextView next=button("›",false,()->selectAdjacent(-1));next.setContentDescription("다음 달 선택");next.setTextSize(28);selector.addView(next,size(52,52));
+        TextView previous=button("‹",false,()->selectAdjacent(1));previous.setContentDescription("이전 달 선택");previous.setTextSize(28);selector.addView(previous,size(56,56));
+        TextView monthButton=button(monthLabel(month)+"  ▾",false,this::showMonths);LinearLayout.LayoutParams monthParams=new LinearLayout.LayoutParams(0,dp(56),1);monthParams.setMargins(dp(10),0,dp(10),0);selector.addView(monthButton,monthParams);
+        TextView next=button("›",false,()->selectAdjacent(-1));next.setContentDescription("다음 달 선택");next.setTextSize(28);selector.addView(next,size(56,56));
         previous.setEnabled(index>=0&&index<months.size()-1&&!busy&&!saving);next.setEnabled(index>0&&!busy&&!saving);
         previous.setAlpha(previous.isEnabled()?1:.35f);next.setAlpha(next.isEnabled()?1:.35f);editingControls.add(monthButton);
-        panel.addView(selector,size(-1,-2));gap(panel,18);
+        panel.addView(selector,size(-1,-2));gap(panel,24);
 
         LinearLayout mediaActions=row();TextView add=button("내 영상 가져오기",true,this::pickVideos);mediaActions.addView(add,new LinearLayout.LayoutParams(0,-2,1));editingControls.add(add);TextView mode=button(personalMode?"샘플 사진으로 전환":"내 영상으로 전환",false,()->{if(!allowed()||busy||saving||importing>0)return;personalMode=!personalMode;prefs.edit().putBoolean("personal_mode_"+month,personalMode).apply();sampleMode=!personalMode&&monthlyRecords().isEmpty();invalidateExport();render();});LinearLayout.LayoutParams modeParams=new LinearLayout.LayoutParams(0,-2,1);modeParams.setMargins(dp(8),0,0,0);mediaActions.addView(mode,modeParams);editingControls.add(mode);panel.addView(mediaActions,size(-1,-2));gap(panel,8);panel.addView(text(importing>0?"가져온 영상의 길이와 중복 여부를 확인하고 있어요…":"원본 영상은 변경하지 않아요. 같은 내용의 파일은 중복으로 추가하지 않아요.",12,MUTED,false));gap(panel,18);
         if(personalMode){renderPersonalClips();if(personalVideos.forMonth(month).isEmpty()){renderEmpty();return;}}else if(records.isEmpty()&&!sampleMode){renderEmpty();return;}
-        LinearLayout provenance=column();provenance.setPadding(dp(16),dp(13),dp(16),dp(13));provenance.setBackground(background(SOFT,0,12));
+        LinearLayout provenance=column();provenance.setPadding(dp(16),dp(16),dp(16),dp(16));provenance.setBackground(background(SOFT,LINE,16));
         provenance.addView(text(personalMode?"내 영상 리캡 · 선택 "+personalVideos.selected(month).size()+"개":sampleMode?"샘플 리캡 체험":"저장한 데모 장면 "+records.size()+"개",14,GREEN,true));gap(provenance,4);
         provenance.addView(text(personalMode?"선택한 구간을 실제 움직이는 영상으로 만들어요. 원본 소리는 합성 배경음악으로 바꿔요.":sampleMode?"공개 사진 3장으로 체험해요. 실제 나의 주행 기록은 아니에요.":"저장한 장면은 샘플 사진이에요. 실제 차량 촬영이나 다른 운전자의 영상이 아니에요.",13,MUTED,false));
-        panel.addView(provenance,size(-1,-2));gap(panel,20);
+        panel.addView(provenance,size(-1,-2));gap(panel,24);
 
         LinearLayout layout=wide?row():column();layout.setGravity(Gravity.TOP);
         View poster=poster(records);int posterWidth=wide?218:208;
@@ -341,7 +341,7 @@ public final class RecapExperience {
         details.addView(text("누르면 설치된 음성 입력 앱이 열려요. 음성은 해당 제공자가 처리할 수 있어요.",12,MUTED,false));gap(details,19);
         generateButton=button(exportedFile==null?"음악을 입혀 리캡 만들기":"새 리캡 만들기",true,this::generate);details.addView(generateButton,size(-1,-2));gap(details,8);
         TextView format=text("세로 9:16  ·  약 "+Math.round(RecapVideoExporter.durationSeconds(frames()))+"초  ·  "+(personalMode?"움직이는 영상과 음악":"사진과 음악"),12,MUTED,false);format.setGravity(Gravity.CENTER);details.addView(format,size(-1,-2));
-        panel.addView(layout,size(-1,-2));gap(panel,18);
+        panel.addView(layout,size(-1,-2));gap(panel,24);
         progressView=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);progressView.setMax(100);progressView.setProgressTintList(ColorStateList.valueOf(GREEN));panel.addView(progressView,size(-1,5));gap(panel,9);
         statusView=text(status.isEmpty()?(exportedFile!=null?"리캡이 준비됐어요. 재생하거나 동영상으로 저장해 보세요.":"장면과 음악을 골랐으면 나만의 한 줄을 더해 보세요."):status,14,MUTED,false);statusView.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);panel.addView(statusView);gap(panel,12);
         LinearLayout actions=row();playButton=button("리캡 재생",false,this::play);saveButton=button(savedUri==null?"동영상 저장":"저장 완료",false,this::saveToGallery);
@@ -483,6 +483,6 @@ public final class RecapExperience {
     private void gap(LinearLayout parent,int height){parent.addView(new View(activity),size(1,height));}
     private GradientDrawable background(int color,int stroke,int radius){GradientDrawable shape=new GradientDrawable();shape.setColor(color);shape.setCornerRadius(dp(radius));if(stroke!=0)shape.setStroke(dp(1),stroke);return shape;}
     private TextView text(String value,int sp,int color,boolean bold){TextView text=new TextView(activity);text.setText(value);text.setTextSize(sp);text.setTextColor(color);text.setTypeface(ScenicTypography.font(activity,bold?600:400));text.setIncludeFontPadding(false);text.setLineSpacing(dp(3),1);return text;}
-    private TextView button(String value,boolean primary,Runnable action){TextView button=text(value,15,primary?WHITE:INK,true);button.setGravity(Gravity.CENTER);button.setPadding(dp(12),dp(14),dp(12),dp(14));button.setMinHeight(dp(50));button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x18355947),background(primary?GREEN:WHITE,primary?0:LINE,11),null));button.setFocusable(true);button.setClickable(true);button.setContentDescription(value);button.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View view,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(view,info);info.setClassName(Button.class.getName());}});button.setOnClickListener(v->action.run());return button;}
+    private TextView button(String value,boolean primary,Runnable action){TextView button=text(value,15,primary?WHITE:INK,true);button.setGravity(Gravity.CENTER);button.setPadding(dp(12),dp(14),dp(12),dp(14));button.setMinHeight(dp(56));button.setMinWidth(dp(56));button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656),background(primary?GREEN:WHITE,primary?0:LINE,12),null));button.setFocusable(true);button.setClickable(true);button.setContentDescription(value);button.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View view,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(view,info);info.setClassName(Button.class.getName());}});button.setOnClickListener(v->action.run());return button;}
     private void toast(String value){Toast.makeText(activity,value,Toast.LENGTH_SHORT).show();}
 }

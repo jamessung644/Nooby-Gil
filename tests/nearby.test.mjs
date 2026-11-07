@@ -50,7 +50,7 @@ test('parking prefers public-name evidence over closer shop lots, then distance,
     assert.equal(url.searchParams.get('category_group_code'), 'PK6'); assert.equal(url.searchParams.get('radius'), '3000');
     return Response.json({ documents });
   } });
-  assert.equal(result.places.length, 10); assert.equal(result.ranking, 'public_label_then_distance');
+  assert.equal(result.places.length, 10); assert.equal(result.ranking, 'availability_then_public_label_then_distance');
   assert.deepEqual(result.places.slice(0, 6).map(p => p.id), ['820', '802', '821', '822', '823', '824']);
   assert.deepEqual(result.places.slice(6, 8).map(p => p.id), ['803', '801']);
   assert.ok(result.places.every(p => p.parkingStatus === 'unknown' && !('free' in p) && !('open' in p) && !('remainingSpaces' in p)));
@@ -138,4 +138,122 @@ test('missing key and provider/malformed responses are safe failures', async () 
   for (const fetchImpl of [async () => { throw new Error('test-private-token'); }, async () => new Response('test-private-token', { status: 403 }), async () => Response.json({ error: 'test-private-token' })]) {
     await assert.rejects(searchNearby(input, { env, fetchImpl }), error => error.status === 502 && !error.message.includes('test-private-token'));
   }
+});
+
+const parkingInput = { kind: 'parking', lat: 36.97, lon: 127.94 };
+const parkingDocument = (overrides = {}) => place({ category_group_code: 'PK6', place_name: '상가 주차장', address_name: '충북 충주시',
+  road_address_name: '', x: '127.94', y: '36.97', ...overrides });
+
+test('parking pages two and three reach official availability ranking before the ten-result cutoff', async () => {
+  const requests = [], signals = [], documents = Array.from({ length: 15 }, (_, index) => parkingDocument({
+    id: String(100 + index), place_name: `상가 ${index} 주차장`, x: '129.16', y: '35.158', distance: String(10 + index),
+  }));
+  const target = (id, name, distance) => parkingDocument({ id, place_name: name, x: '129.16', y: '35.158', distance });
+  const result = await searchNearby({ ...input, kind: 'parking', focusId: '302' }, { env, fetchImpl: async (url, options) => {
+    if (url.hostname !== 'dapi.kakao.com') {
+      assert.equal(url.href, 'https://bsparking.bisco.or.kr/api/parking/realtime/list');
+      assert.equal(options.headers.Authorization, undefined);
+      return Response.json({ result: true, data: [
+        { parkingId: 1, sectnId: 1, parkingName: '공원 서측 공영주차장', lat: '35.158', lng: '129.16', cellCount: 100, parkCount: 7 },
+        { parkingId: 2, sectnId: 2, parkingName: '공원 동측 공영주차장', lat: '35.158', lng: '129.16', cellCount: 100, parkCount: 12 },
+      ] });
+    }
+    const page = Number(url.searchParams.get('page')); requests.push(page); signals.push(options.signal);
+    assert.equal(url.searchParams.get('size'), '15'); assert.equal(url.searchParams.get('radius'), '3000');
+    assert.equal(options.headers.Authorization, 'KakaoAK test-private-token');
+    return Response.json({ meta: { is_end: page === 3 }, documents: page === 1 ? documents
+      : [target(page === 2 ? '201' : '302', page === 2 ? '공원 서측 공영주차장' : '공원 동측 공영주차장', page === 2 ? '700' : '800')] });
+  } });
+  assert.deepEqual(requests, [1, 2, 3]); assert.ok(signals.every(signal => signal === signals[0]));
+  assert.equal(result.places.length, 10); assert.deepEqual(result.places.slice(0, 2).map(value => value.id), ['201', '302']);
+  assert.deepEqual(result.places.slice(0, 2).map(value => value.parking.availableSpaces), [7, 12]);
+  assert.equal(result.focus.id, '302'); assert.equal(result.focus.parkingStatus, 'available');
+});
+
+test('parking deduplicates pages while retaining normal name, location and distance validation', async () => {
+  const pages = [
+    [parkingDocument({ id: '100', place_name: '원래 공영주차장', distance: '300' }), parkingDocument({ id: '101' })],
+    [parkingDocument({ id: '100', place_name: '중복 변경 이름', distance: '0' }), parkingDocument({ id: '102' }), parkingDocument({ id: '../bad' })],
+    [parkingDocument({ id: '103', x: '' }), parkingDocument({ id: '104', distance: '3001' }), parkingDocument({ id: '105', category_group_code: 'FD6' }),
+      parkingDocument({ id: '106', place_name: '깨진\u0000이름' }), parkingDocument({ id: '107', place_name: '새 공영주차장' })],
+  ];
+  const result = await searchNearby(parkingInput, { env, fetchImpl: async url => {
+    const number = Number(url.searchParams.get('page'));
+    return Response.json({ documents: pages[number - 1], meta: { is_end: number === 3 } });
+  } });
+  assert.deepEqual(new Set(result.places.map(value => value.id)), new Set(['100', '101', '102', '107']));
+  assert.equal(result.places.find(value => value.id === '100').name, '원래 공영주차장');
+  assert.equal(result.places.find(value => value.id === '100').distanceMeters, 300);
+});
+
+test('parking caps pages at three and raw candidates at fifteen per page', async () => {
+  const requests = [];
+  const result = await searchNearby({ ...parkingInput, focusId: '315' }, { env, fetchImpl: async url => {
+    const number = Number(url.searchParams.get('page')); requests.push(number);
+    assert.ok(number >= 1 && number <= 3);
+    return Response.json({ meta: { is_end: false }, documents: Array.from({ length: 20 }, (_, index) => parkingDocument({
+      id: String(number * 100 + index), place_name: index < 15 ? `상가 ${number} ${index} 주차장` : `넘친 공영주차장 ${number} ${index}`, distance: String(100 + index),
+    })) });
+  } });
+  assert.deepEqual(requests, [1, 2, 3]); assert.equal(result.places.length, 10); assert.equal(result.focus, null);
+  assert.ok(result.places.every(value => !value.name.includes('넘친')));
+});
+
+test('only an explicit false is_end requests another parking page; restaurants never page', async () => {
+  for (const meta of [undefined, {}, { is_end: true }, { is_end: 'false' }, { is_end: 0 }]) {
+    let calls = 0;
+    await searchNearby(parkingInput, { env, fetchImpl: async () => { calls++; return Response.json({ documents: [parkingDocument()], meta }); } });
+    assert.equal(calls, 1);
+  }
+  for (const request of [input, { ...input, query: '커피' }]) {
+    let calls = 0;
+    const result = await searchNearby(request, { env, fetchImpl: async url => {
+      calls++; assert.equal(url.searchParams.has('page'), false);
+      return Response.json({ documents: [place()], meta: { is_end: false } });
+    } });
+    assert.equal(calls, 1); assert.equal(result.places.length, 1);
+  }
+});
+
+test('optional parking page failure preserves earlier valid pages while first-page failure remains an error', async () => {
+  const failures = [async () => { throw new Error('test-private-token'); }, async () => new Response('', { status: 403 }),
+    async () => new Response('', { status: 500 }), async () => Response.json({ documents: null }), async () => new Response('invalid JSON')];
+  for (const fail of failures) {
+    for (const failedPage of [2, 3]) {
+      const calls = [];
+      const result = await searchNearby(parkingInput, { env, fetchImpl: async url => {
+        const number = Number(url.searchParams.get('page')); calls.push(number);
+        if (number === failedPage) return fail();
+        return Response.json({ documents: [parkingDocument({ id: String(number) })], meta: { is_end: false } });
+      } });
+      assert.deepEqual(calls, failedPage === 2 ? [1, 2] : [1, 2, 3]);
+      assert.equal(result.places.length, failedPage - 1); assert.ok(!JSON.stringify(result).includes('test-private-token'));
+    }
+    await assert.rejects(searchNearby(parkingInput, { env, fetchImpl: fail }), error => error.status === 502 && !error.message.includes('test-private-token'));
+  }
+});
+
+test('parking page deadline is shared and later-page timeout returns the already received results', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let firstFinished, laterStarted;
+  const firstPageDelay = new Promise(resolve => { firstFinished = resolve; });
+  const waitingForLater = new Promise(resolve => { laterStarted = resolve; });
+  let signal;
+  const pending = searchNearby(parkingInput, { env, fetchImpl: async (url, options) => {
+    signal = options.signal;
+    if (url.searchParams.get('page') === '1') {
+      await firstPageDelay;
+      return Response.json({ documents: [parkingDocument()], meta: { is_end: false } });
+    }
+    laterStarted(); return new Promise(() => {});
+  } });
+  t.mock.timers.tick(6000); firstFinished();
+  await waitingForLater;
+  t.mock.timers.tick(5999); assert.equal(signal.aborted, false);
+  t.mock.timers.tick(1);
+  const result = await pending;
+  assert.equal(signal.aborted, true); assert.equal(result.places.length, 1);
+  const firstTimeout = searchNearby(parkingInput, { env, fetchImpl: async () => new Promise(() => {}) });
+  t.mock.timers.tick(12000);
+  await assert.rejects(firstTimeout, error => error.status === 504);
 });

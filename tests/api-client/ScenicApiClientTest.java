@@ -239,6 +239,16 @@ public final class ScenicApiClientTest {
         FakeConnection hugeDeclared = respond(200, "{}"); hugeDeclared.declaredLength = 3 * 1024 * 1024;
         failsSafely(() -> client.getStatus(), hugeDeclared);
         DestinationPlace destination=DestinationPlace.of("public-haeundae","해운대해수욕장","부산 해운대구",35.1587,129.1604);
+        String inaccessibleBody="{\"error\":\"secret-provider-key https://provider.invalid/private-route\"}";
+        FakeConnection inaccessible=respond(422,inaccessibleBody);
+        try{client.destinationRoutes(35.1151,129.0414,destination,30,"coast");throw new AssertionError("Expected unavailable automobile route failure");}
+        catch(ScenicApiClient.ApiException expected){
+            check("선택한 장소까지의 자동차 경로를 확인하지 못했어요. 출발지 또는 다른 풍경·장소를 선택해 주세요.".equals(expected.getMessage()),"HTTP 422 explains an unavailable route and offers another origin or place");
+            check(!expected.getMessage().contains("secret")&&!expected.getMessage().contains("https://"),"HTTP 422 never exposes provider secrets or raw response URLs");
+            check(expected.getCause()==null,"HTTP 422 keeps no sensitive exception cause");
+        }
+        check(inaccessible.inputStreamReads==0&&inaccessible.input.available()==inaccessibleBody.getBytes(StandardCharsets.UTF_8).length,"HTTP 422 response body is not parsed or consumed");
+        check(inaccessible.input.closed&&inaccessible.disconnected,"HTTP 422 closes the error response and connection");
         byte[] destinationBoundary=paddedJson(6*1024*1024);
         FakeConnection largeDestination=new FakeConnection(200,destinationBoundary);largeDestination.declaredLength=destinationBoundary.length;responses.add(largeDestination);
         check(client.destinationRoutes(35.1151,129.0414,destination,30,"coast").getBoolean("ok"),"Destination comparison accepts a successful JSON response exactly at 6 MiB");
