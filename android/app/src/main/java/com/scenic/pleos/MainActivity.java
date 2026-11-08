@@ -100,6 +100,7 @@ public final class MainActivity extends Activity implements LocationListener {
     private long parkingPermissionDeadline,parkingPermissionRevision;
     private boolean parkingChecking;
     private int parkingCheckRedirects;
+    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener parkingWatchListener=(prefs,key)->{if("proposalText".equals(key)||"message".equals(key))handler.post(()->{if(resumed&&tab==0)render();});};
     private long parkingCheckRevision;
     private ScenicApiClient parkingCheckClient;
     private Future<?> parkingCheckJob;
@@ -129,8 +130,8 @@ public final class MainActivity extends Activity implements LocationListener {
         vehicle=new VehicleBridge(this,(connected,speed,restricted,detail)->runOnUiThread(()->{boolean wasBlocked=isCarUiBlocked();vehicleConnected=connected;vehicleSpeed=speed;vehicleRestricted=restricted;vehicleDetail=detail;if(isCarUiBlocked())invalidateApi(false,false);if(wasBlocked!=isCarUiBlocked())render();else updateStatus();enforceVideoSafety();}));
         initDestinationExperience();initExperiences();render();
     }
-    @Override protected void onResume(){super.onResume();resumed=true;syncParkingWatch();handler.post(uiTicker);vehicle.start();if(parkingPermissionPending&&parkingPermissionResolved)resumeParkingPermissionNavigation();if(!demo||mapGpsEnabled)startGps();if(running&&demoDriving)handler.postDelayed(plannerMode?simulator:destinationDemoTicker,plannerMode?14000:7000);render();if(resumeDestinationAfterPermission&&checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED){resumeDestinationAfterPermission=false;requestDestinationRoutes();}}
-    @Override protected void onPause(){super.onPause();resumed=false;if(nativeNavigation!=null)nativeNavigation.pause();pauseExperiences();closeMusicWeb();cancelDestinationWork();if(captureDemo!=null)captureDemo.dismiss();handler.removeCallbacks(destinationDemoTicker);invalidateApi(false,false);handler.removeCallbacks(uiTicker);handler.removeCallbacks(simulator);player.pause();stopGps();vehicle.stop();if(kakaoMap!=null)kakaoMap.onPause();dismissActionDialog();if(videoDialog!=null)videoDialog.dismiss();updateStatus();}
+    @Override protected void onResume(){super.onResume();resumed=true;getSharedPreferences("parking_watch",0).registerOnSharedPreferenceChangeListener(parkingWatchListener);syncParkingWatch();handler.post(uiTicker);vehicle.start();if(parkingPermissionPending&&parkingPermissionResolved)resumeParkingPermissionNavigation();if(!demo||mapGpsEnabled)startGps();if(running&&demoDriving)handler.postDelayed(plannerMode?simulator:destinationDemoTicker,plannerMode?14000:7000);render();if(resumeDestinationAfterPermission&&checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED){resumeDestinationAfterPermission=false;requestDestinationRoutes();}}
+    @Override protected void onPause(){super.onPause();resumed=false;getSharedPreferences("parking_watch",0).unregisterOnSharedPreferenceChangeListener(parkingWatchListener);if(nativeNavigation!=null)nativeNavigation.pause();pauseExperiences();closeMusicWeb();cancelDestinationWork();if(captureDemo!=null)captureDemo.dismiss();handler.removeCallbacks(destinationDemoTicker);invalidateApi(false,false);handler.removeCallbacks(uiTicker);handler.removeCallbacks(simulator);player.pause();stopGps();vehicle.stop();if(kakaoMap!=null)kakaoMap.onPause();dismissActionDialog();if(videoDialog!=null)videoDialog.dismiss();updateStatus();}
     @Override protected void onDestroy(){if(nativeNavigation!=null)nativeNavigation.destroy();pauseExperiences();if(discoveryView!=null)discoveryView.destroy();if(destinationPhotoView!=null)destinationPhotoView.destroy();if(recapExperience!=null)recapExperience.destroy();if(nearbyStops!=null)nearbyStops.destroy();closeMusicWeb();cancelDestinationWork();if(captureDemo!=null)captureDemo.dismiss();apiExecutor.shutdownNow();handler.removeCallbacksAndMessages(null);player.release();vehicle.stop();if(kakaoMap!=null)kakaoMap.release();super.onDestroy();}
     @Override public void onConfigurationChanged(Configuration config){super.onConfigurationChanged(config);pauseExperiences();if(captureDemo!=null)captureDemo.dismiss();render();if(actionDialog!=null)styleDialog(actionDialog);}
     private int d(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
@@ -321,7 +322,7 @@ public final class MainActivity extends Activity implements LocationListener {
     }
     private void chooseScenicPhoto(ScenicPhotoCollection.Photo photo){
         if(!canChangeRoute()||photo==null)return;destinationPhotoView.pause();selectedScenicPhoto=photo;rememberScenicPhoto();destinationPhotoBrowsing=false;destinationTheme=photo.scene;
-        if(regionPhotoMode&&regionPlace!=null){destinationPlace=photo.place;detourMinutes=0;journey.chooseScenicDestination(photo.place);}
+        if(regionPhotoMode&&regionPlace!=null){destinationPlace=photo.place;if(detourMinutes==0)detourMinutes=30;journey.chooseScenicDestination(photo.place);}
         else{if(detourMinutes==0)detourMinutes=30;journey.beginDestination(destinationPlace);journey.setScenicWaypoint(photo.place);}saveJourney();requestDestinationRoutes();
     }
     private void renderDestinationPhotos(){
@@ -417,9 +418,10 @@ public final class MainActivity extends Activity implements LocationListener {
     }
     private void addParkingWatchControls(LinearLayout panel){
         if(journey.parking()==null||!sameJourneyPlace(destinationPlace,journey.parking()))return;
-        gap(panel,12);panel.addView(txt("주차 안내를 시작하면 1분마다 빈자리를 확인합니다. 현재 주차장과 대안 모두 제공처 갱신 시각이 확인된 최신 자료일 때 만차 자동 변경을 지원합니다.",14,MUTED));
+        gap(panel,12);panel.addView(txt("주차 안내를 시작하면 1분마다 빈자리를 확인합니다. 현재 주차장이 만차이거나 곧 만차가 되면 더 여유 있는 주차장으로 바꿀지 제안하고, 수락하면 순정 내비 목적지를 바꿉니다.",14,MUTED));
         panel.addView(txt("실시간 정보 제공 지역만 확인 가능 · 최대 3시간 · 앱 또는 허용된 알림에서 중단 가능",12,MUTED));
-        String status=ParkingWatchService.status(this);if(!status.isEmpty()){gap(panel,6);panel.addView(txt(status,14,INK));}
+        String proposal=ParkingWatchService.proposalText(this);if(!proposal.isEmpty()){gap(panel,10);panel.addView(txt("주차장 변경 제안",13,MUTED));panel.addView(txt(proposal,16,INK));gap(panel,6);LinearLayout choices=row();choices.addView(button("변경",true,()->{ParkingWatchService.accept(this);navigationStatus="제안을 수락했어요. 빈자리를 다시 확인한 뒤 순정 내비 목적지를 바꿉니다.";render();}),new LinearLayout.LayoutParams(0,-2,1));space(choices,8);choices.addView(button("유지",false,()->{ParkingWatchService.decline(this);render();}),new LinearLayout.LayoutParams(0,-2,1));panel.addView(choices);}
+        String status=ParkingWatchService.status(this);if(!status.isEmpty()&&!status.equals(proposal)){gap(panel,6);panel.addView(txt(status,14,INK));}
         if(ParkingWatchService.active(this)){gap(panel,8);panel.addView(button("자동 주차 확인 중단",false,()->{ParkingWatchService.stop(this);navigationStatus="자동 주차 확인을 중단했어요. 순정 내비 안내는 유지됩니다.";render();}),lp(-1,-2));}
         gap(panel,8);panel.addView(button("만차·입차 불가 · 다른 주차장 찾기",false,()->{if(!canChangeRoute())return;DestinationPlace blocked=journey.parking();ParkingWatchService.stop(this);switchExperienceTab(5);nearbyStops.avoidParking(blocked);}),lp(-1,-2));
     }
