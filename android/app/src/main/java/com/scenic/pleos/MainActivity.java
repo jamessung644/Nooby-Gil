@@ -423,7 +423,6 @@ public final class MainActivity extends Activity implements LocationListener {
         String proposal=ParkingWatchService.proposalText(this);if(!proposal.isEmpty()){gap(panel,10);panel.addView(txt("주차장 변경 제안",13,MUTED));panel.addView(txt(proposal,16,INK));gap(panel,6);LinearLayout choices=row();choices.addView(button("변경",true,()->{ParkingWatchService.accept(this);navigationStatus="제안을 수락했어요. 빈자리를 다시 확인한 뒤 순정 내비 목적지를 바꿉니다.";render();}),new LinearLayout.LayoutParams(0,-2,1));space(choices,8);choices.addView(button("유지",false,()->{ParkingWatchService.decline(this);render();}),new LinearLayout.LayoutParams(0,-2,1));panel.addView(choices);}
         String status=ParkingWatchService.status(this);if(!status.isEmpty()&&!status.equals(proposal)){gap(panel,6);panel.addView(txt(status,14,INK));}
         if(ParkingWatchService.active(this)){gap(panel,8);panel.addView(button("자동 주차 확인 중단",false,()->{ParkingWatchService.stop(this);navigationStatus="자동 주차 확인을 중단했어요. 순정 내비 안내는 유지됩니다.";render();}),lp(-1,-2));}
-        gap(panel,8);panel.addView(button("만차·입차 불가 · 다른 주차장 찾기",false,()->{if(!canChangeRoute())return;DestinationPlace blocked=journey.parking();ParkingWatchService.stop(this);switchExperienceTab(5);nearbyStops.avoidParking(blocked);}),lp(-1,-2));
     }
     private String sceneTrack(){if("energetic".equals(musicTaste))return "sea";if("chill".equals(musicTaste)||"instrumental".equals(musicTaste))return "night";return "coast".equals(destinationTheme)?"sea":"city".equals(destinationTheme)?"night":"lake";}
     private void renderLiveRoutes(){
