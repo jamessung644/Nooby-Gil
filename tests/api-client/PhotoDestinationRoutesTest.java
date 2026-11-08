@@ -18,6 +18,14 @@ public final class PhotoDestinationRoutesTest {
             .put("origin",new JSONObject().put("lat",35.1151).put("lon",129.0414)).put("scenicStatus","ok").put("message","관광 장소로 가는 도로를 확인했어요.").put("routes",new JSONArray().put(route));
     }
     private static DestinationRoutePlan parse(JSONObject o)throws Exception{return DestinationRoutePlan.parsePhotoDestination(o,region(),photo(),35.1151,129.0414,"coast");}
+    private static JSONObject withScenic(double minutes,String coordinates)throws Exception{
+        JSONObject o=response();
+        JSONObject scenic=new JSONObject().put("id","scenic").put("title","풍경 경로").put("reason","달맞이길을 지나 같은 목적지로 갑니다.").put("source","Kakao Mobility")
+            .put("distanceKm",23).put("durationMin",minutes).put("coordinates",new JSONArray(coordinates)).put("headline","달맞이길 경유")
+            .put("scenicLabels",new JSONArray().put("해안 3km")).put("waypoints",new JSONArray().put(new JSONObject().put("id","tour-777").put("name","달맞이길").put("lat",35.15).put("lon",129.15).put("source","한국관광공사 TourAPI")));
+        o.getJSONArray("routes").put(scenic);o.put("scenicStatus","ok");return o;
+    }
+    private static void rejectExtras(JSONObject o)throws Exception{try{DestinationRoutePlan.parsePhotoDestination(o,region(),photo(),35.1151,129.0414,"coast",30);throw new AssertionError("Accepted a scenic road that misses the photo place or the time budget");}catch(JSONException expected){checks++;}}
     private static void reject(Change change)throws Exception{JSONObject o=response();change.apply(o);try{parse(o);throw new AssertionError("Accepted substituted/unreachable photo");}catch(JSONException expected){checks++;}}
     public static void main(String[] args)throws Exception{
         DestinationRoutePlan plan=parse(response());
@@ -33,6 +41,12 @@ public final class PhotoDestinationRoutesTest {
         reject(o->o.getJSONArray("routes").put(o.getJSONArray("routes").getJSONObject(0)));
         reject(o->o.getJSONArray("routes").getJSONObject(0).put("source","invented-road"));
         JSONObject near=response();near.getJSONArray("routes").getJSONObject(0).put("coordinates",new JSONArray("[[35.1151,129.0414],[35.1600,129.1926]]"));parse(near);checks++;
+        // With extra minutes the same photo place may also be reached by a scenic road.
+        DestinationRoutePlan extras=DestinationRoutePlan.parsePhotoDestination(withScenic(40,"[[35.1151,129.0414],[35.1500,129.1500],[35.1595,129.1926]]"),region(),photo(),35.1151,129.0414,"coast",30);
+        if(extras.routes.size()!=2||extras.scenic==null||!extras.destination.id.equals(photo().id)||extras.scenic.waypoints.size()!=1)throw new AssertionError("Scenic road to the photo place");checks++;
+        rejectExtras(withScenic(80,"[[35.1151,129.0414],[35.1500,129.1500],[35.1595,129.1926]]"));
+        rejectExtras(withScenic(40,"[[35.1151,129.0414],[35.1500,129.1500],[35.1587,129.1604]]"));
+        try{DestinationRoutePlan.parsePhotoDestination(withScenic(40,"[[35.1151,129.0414],[35.1500,129.1500],[35.1595,129.1926]]"),region(),photo(),35.1151,129.0414,"coast");throw new AssertionError("Extra roads need extra minutes");}catch(JSONException expected){checks++;}
         System.out.println("PhotoDestinationRoutesTest: "+checks+" checks passed");
     }
 }

@@ -79,8 +79,12 @@ public final class ScenicApiClient {
         return destinationRoutes(originLat,originLon,destination,extraMinutes,theme,scenicSelection,false);
     }
     public JSONObject photoDestinationRoutes(double originLat,double originLon,DestinationPlace region,String theme,String selection)throws ApiException {
+        return photoDestinationRoutes(originLat,originLon,region,theme,selection,0);
+    }
+    /** With extra minutes the server also offers a course road and a scenic road to the same photo place. */
+    public JSONObject photoDestinationRoutes(double originLat,double originLon,DestinationPlace region,String theme,String selection,int extraMinutes)throws ApiException {
         if(selection==null)throw new ApiException("방문할 풍경 사진을 먼저 선택해 주세요.");
-        return destinationRoutes(originLat,originLon,region,0,theme,selection,true);
+        return destinationRoutes(originLat,originLon,region,extraMinutes,theme,selection,true);
     }
     private JSONObject destinationRoutes(double originLat,double originLon,DestinationPlace destination,
                                        int extraMinutes,String theme,String scenicSelection,boolean photoDestination)throws ApiException {

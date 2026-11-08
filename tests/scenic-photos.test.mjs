@@ -451,3 +451,29 @@ test('eight bundled regional photos are licensed, attributed, diverse and match 
     assert.equal(bytes.readUInt16BE(0), 0xffd8);
   }
 });
+
+test('photo-destination with extra minutes adds a course road and a scenic road that still end at the photo place', async () => {
+  const signer = createScenicSelectionSigner(), token = signer.issue(destination, place);
+  const urls = [];
+  const result = await planDestinationRoutes({ origin, destination, mode: 'photo-destination', scenicSelection: token, extraMinutes: 30 }, {
+    env, selectionSigner: signer, catalog: { places: [] }, courses: [], fetchImpl: async url => {
+      const parsed = new URL(url); urls.push(parsed);
+      return route([[origin.lat, origin.lon], [place.lat, place.lon]], 1800);
+    },
+  });
+  assert.equal(result.mode, 'photo-destination');
+  assert.deepEqual(result.destination, place);
+  assert.deepEqual(result.requestedDestination, destination);
+  assert.equal(result.routes[0].id, 'fast');
+  assert.ok(urls.every(url => url.searchParams.get('destination') === `${place.lon},${place.lat}`), 'never routes back to the region');
+  assert.ok(['ok', 'no_candidates', 'no_feasible_route', 'provider_unavailable'].includes(result.scenicStatus));
+});
+
+test('photo-destination without extra minutes stays a single direct road', async () => {
+  const signer = createScenicSelectionSigner(), token = signer.issue(destination, place);
+  const result = await planDestinationRoutes({ origin, destination, mode: 'photo-destination', scenicSelection: token }, {
+    env, selectionSigner: signer, fetchImpl: async () => route([[origin.lat, origin.lon], [place.lat, place.lon]], 1800),
+  });
+  assert.deepEqual(result.routes.map(value => value.id), ['fast']);
+  assert.equal(result.scenicStatus, 'ok');
+});
