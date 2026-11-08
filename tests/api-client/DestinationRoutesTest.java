@@ -40,6 +40,9 @@ public final class DestinationRoutesTest {
                 .put("routes",new JSONArray().put(fast).put(scenic)).put("scenicStatus","ok").put("message","같은 목적지로 가는 두 경로를 확인했어요.");
     }
     private static JSONObject route(JSONObject json,int i)throws Exception{return json.getJSONArray("routes").getJSONObject(i);}
+    private static JSONObject stop(String id,String name,double lat,double lon)throws Exception{
+        return new JSONObject().put("id",id).put("name",name).put("lat",lat).put("lon",lon).put("source","한국관광공사 TourAPI");
+    }
     private static void reject(Change change,String label)throws Exception {
         JSONObject json=response();change.apply(json);
         try{DestinationRoutePlan.parse(json,destination(),LAT,LON,30,"coast");throw new AssertionError(label);}
@@ -84,6 +87,23 @@ public final class DestinationRoutesTest {
         DestinationRoutePlan plan=DestinationRoutePlan.parse(response(),publicPlace,LAT,LON,30,"coast");
         check(plan.destination==publicPlace&&plan.routes.size()==2&&plan.fast.id.equals("fast")&&plan.scenic.id.equals("scenic"),"Preserve selected destination and ordered alternatives");
         check(plan.fast.durationMin==31.25&&plan.scenic.durationMin==50.5,"Preserve exact provider durations for comparison");
+        // A recommended-course road may sit between the fast and the computed scenic road.
+        JSONObject curatedRoute=new JSONObject(route(response(),1).toString()).put("id","curated").put("title","추천 코스 길").put("durationMin",44.0);
+        JSONObject withCurated=response();withCurated.put("routes",new JSONArray().put(route(withCurated,0)).put(curatedRoute).put(route(withCurated,1)));
+        DestinationRoutePlan three=DestinationRoutePlan.parse(withCurated,publicPlace,LAT,LON,30,"coast");
+        check(three.routes.size()==3&&three.curated.id.equals("curated")&&three.scenic.id.equals("scenic")&&three.curated.label().equals("추천 코스 길"),"Accept fast, recommended-course and scenic roads in that order");
+        JSONObject checkpoint=new JSONObject().put("id","coast-1-2").put("kind","coast").put("name","바다·해안 구간 4km").put("lat",35.13).put("lon",129.1).put("endLat",35.14).put("endLon",129.13).put("km",4.0);
+        JSONObject withPoints=response();route(withPoints,1).put("checkpoints",new JSONArray().put(checkpoint));
+        check(DestinationRoutePlan.parse(withPoints,publicPlace,LAT,LON,30,"coast").scenic.checkpoints.size()==1,"A scenic road may carry checkpoints");
+        reject(j->route(j,0).put("checkpoints",new JSONArray().put(checkpoint)),"The fast road has no scenery checkpoints");
+        reject(j->route(j,1).put("checkpoints",new JSONArray().put(new JSONObject(checkpoint.toString()).put("kind","sea"))),"A malformed checkpoint rejects the response");
+        JSONObject onlyCurated=response();onlyCurated.put("routes",new JSONArray().put(route(onlyCurated,0)).put(curatedRoute));
+        DestinationRoutePlan two=DestinationRoutePlan.parse(onlyCurated,publicPlace,LAT,LON,30,"coast");
+        check(two.scenic==null&&two.curated!=null&&two.routes.size()==2,"A recommended-course road may be the only alternative");
+        JSONObject swapped=response();swapped.put("routes",new JSONArray().put(route(swapped,0)).put(route(swapped,1)).put(curatedRoute));
+        reject(j->j.put("routes",swapped.getJSONArray("routes")),"Recommended-course road must precede the scenic road");
+        reject(j->j.put("routes",new JSONArray().put(route(j,0)).put(curatedRoute).put(curatedRoute)),"At most one recommended-course road");
+        reject(j->j.put("routes",new JSONArray().put(route(j,0)).put(new JSONObject(curatedRoute.toString()).put("durationMin",120.0))),"A recommended-course road obeys the same extra-time budget");
         CourseEngine.Course fast=plan.fast.toCourse("부산역 · 공개 예시 출발지"),scenic=plan.scenic.toCourse();
         check(fast.spots.length==2&&scenic.spots.length==3,"A destination trip has origin and destination with only the scenic pass-through added");
         check(fast.spots[0].title.contains("공개 예시")&&fast.spots[0].lat==LAT,"Map origin label cannot masquerade as current GPS");
@@ -169,6 +189,24 @@ public final class DestinationRoutesTest {
         check(DestinationRoutePlan.parse(distantRoad,publicPlace,LAT,LON,30,"coast").scenic!=null,"General candidate remains within legacy road proximity allowance");
         try{DestinationRoutePlan.parse(distantRoad,publicPlace,LAT,LON,30,"coast",chosenPhotoPlace);throw new AssertionError("Selected photo needs closer road evidence");}catch(JSONException expected){checks++;}
 
+        // A scenic road passes one or two places, never more than the native navigation accepts.
+        JSONObject twoStops=response();
+        route(twoStops,1).put("coordinates",new JSONArray("[[35.1151,129.0414],[35.1300,129.1000],[35.1450,129.1300],[35.1587,129.1604]]"))
+                .getJSONArray("waypoints").put(stop("67890","두 번째 해안 통과 지점",35.145,129.13));
+        DestinationRoutePlan pair=DestinationRoutePlan.parse(twoStops,publicPlace,LAT,LON,30,"coast");
+        CourseEngine.Course pairCourse=pair.scenic.toCourse();
+        check(pair.scenic.waypoints.size()==2&&pairCourse.spots.length==4,"A scenic road may pass two places");
+        check(pairCourse.spots[1].title.equals("해안 통과 지점")&&pairCourse.spots[2].title.equals("두 번째 해안 통과 지점")
+                &&pairCourse.spots[3].title.equals(publicPlace.name),"Passing order is kept and the requested destination stays last");
+        check(!pairCourse.id.equals(scenic.id),"Two stops get their own moment identity");
+        try{DestinationRoutePlan.parse(twoStops,publicPlace,LAT,LON,30,"coast",chosenPhotoPlace);throw new AssertionError("A photo selection is exactly one stop");}
+        catch(JSONException expected){checks++;}
+        reject(j->{
+            JSONObject r=route(j,1).put("coordinates",new JSONArray("[[35.1151,129.0414],[35.1300,129.1000],[35.1400,129.1200],[35.1500,129.1400],[35.1587,129.1604]]"));
+            r.getJSONArray("waypoints").put(stop("67890","둘째",35.14,129.12)).put(stop("11111","셋째",35.15,129.14));
+        },"Reject more than two scenic stops");
+        reject(j->route(j,1).getJSONArray("waypoints").put(stop("12345","같은 장소 다시",35.13,129.10)),"Reject the same scenic place passed twice");
+
         URL.setURLStreamHandlerFactory(protocol->!protocol.equals("http")&&!protocol.equals("https")?null:new URLStreamHandler(){
             protected java.net.URLConnection openConnection(URL url){Connection next=connections.remove();next.endpoint(url);return next;}
         });
@@ -217,6 +255,13 @@ public final class DestinationRoutesTest {
         rejectRequest(()->client.destinationRoutes(LAT,LON,publicPlace,121,"all"),"Bound detour budget");
         for(String theme:new String[]{null,"","sea","lake","night","Mountain","water ","unknown"})
             rejectRequest(()->client.destinationRoutes(LAT,LON,publicPlace,30,theme),"Require backend canonical theme before connecting");
+        Connection parkingRequest=enqueue(new JSONObject().put("places",new JSONArray()).toString());
+        client.nearbyParking(publicPlace,"2029879158");
+        check(parkingRequest.getURL().getPath().equals("/api/nearby")&&parkingRequest.getRequestMethod().equals("GET"),"Parking watch uses nearby GET");
+        check(parkingRequest.getURL().getQuery().contains("focusId=2029879158")&&parkingRequest.getURL().getQuery().contains("kind=parking"),"Focused lot is kept even when full and outside ten results");
+        check(parkingRequest.getReadTimeout()==30000,"Parking provider bounded timeout");
+        rejectRequest(()->client.nearbyParking(null,"123"),"Parking watch needs chosen anchor");
+        rejectRequest(()->client.nearbyParking(publicPlace,"1&lat=0"),"Parking watch ID cannot inject query");
         check(connections.isEmpty(),"No hidden retries or secondary requests");
         System.out.println("DestinationRoutesTest: "+checks+" checks passed");
     }

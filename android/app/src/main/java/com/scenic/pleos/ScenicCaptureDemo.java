@@ -68,17 +68,62 @@ public final class ScenicCaptureDemo {
     }
     /** A compact route photo. Tapping it opens a sample preview, never initiates a capture. */
     public View createPreview(String routeId,String routeName,String destination,String segmentName) {
+        return createPreview(routeId,routeName,destination,segmentName,java.util.Collections.emptyList());
+    }
+    /** With checkpoints, the newest clip recorded at one of them on this route is shown first. */
+    public View createPreview(String routeId,String routeName,String destination,String segmentName,List<RouteCheckpoint> checkpoints) {
         String imageKey=ScenicCaptureStore.imageKeyFor(segmentName,destination);
         String caption=location(imageKey)+" · 공유 예시";
         String detail="경로 선택 화면을 위한 공유 예시입니다. 다른 운전자의 실제 기록이 아닙니다.";
-        for(ScenicCaptureStore.Record record:store.recordsForRoute(routeId)){imageKey=record.imageKey;caption=record.segmentName+(record.sharedPreview?" · 내 공유 미리보기":" · 내 경로의 장면");detail="이 경로에 추가한 내 데모 장면입니다. 이 기기에만 저장되며 다른 운전자에게 전송되지 않습니다.";break;}
+        String note="샘플 사진 · 실제 차량 촬영 아님";
+        java.util.ArrayList<String> ids=new java.util.ArrayList<>();for(RouteCheckpoint checkpoint:checkpoints)ids.add(checkpoint.id);
+        ScenicCaptureStore.Record clip=routeId==null?null:store.latestForCheckpoints(routeId,ids);
+        if(clip!=null){
+            imageKey=clip.imageKey;caption=clip.segmentName+" · 구간 자동 촬영";
+            detail="이 길의 촬영 지점에서 자동으로 저장한 데모 기록입니다. 이 기기에만 저장되며 다른 운전자에게 전송되지 않습니다.";
+            note="none".equals(imageKey)?"샘플 이미지 없음 · 실제 차량 촬영 아님":note;
+        } else for(ScenicCaptureStore.Record record:store.recordsForRoute(routeId)){imageKey=record.imageKey;caption=record.segmentName+(record.sharedPreview?" · 내 공유 미리보기":" · 내 경로의 장면");detail="이 경로에 추가한 내 데모 장면입니다. 이 기기에만 저장되며 다른 운전자에게 전송되지 않습니다.";break;}
         final String previewKey=imageKey;final String route=routeName;final String previewDetail=detail;
         LinearLayout preview=column();
         preview.addView(photo(previewKey,108,caption),size(-1,108));
-        TextView note=text("샘플 사진 · 실제 차량 촬영 아님",12,MUTED,false);note.setPadding(0,dp(6),0,0);preview.addView(note);
+        TextView noteView=text(note,12,MUTED,false);noteView.setPadding(0,dp(6),0,0);preview.addView(noteView);
         preview.setContentDescription(caption+". 샘플 사진. 큰 미리보기 열기");preview.setFocusable(true);
         preview.setOnClickListener(v->{if(allowed())showPhoto(previewKey,route,previewDetail);});
+        if(!checkpoints.isEmpty()){
+            LinearLayout wrapper=column();wrapper.addView(preview);
+            int count=routeId==null?0:store.countForCheckpoints(routeId,ids);
+            TextView summary=text("촬영 지점 "+checkpoints.size()+"곳 · 이 길에서 기록 "+count+"개",13,INK,true);summary.setPadding(0,dp(10),0,0);wrapper.addView(summary);
+            wrapper.addView(autoCaptureSwitch());
+            return wrapper;
+        }
         return preview;
+    }
+    /** Recording at checkpoints is the user's choice and stays off until switched on. */
+    private View autoCaptureSwitch() {
+        Switch toggle=new Switch(activity);toggle.setText("촬영 지점에서 자동 기록");toggle.setTextColor(INK);toggle.setTextSize(15);
+        toggle.setTypeface(ScenicTypography.font(activity,600));toggle.setMinHeight(dp(48));toggle.setChecked(store.autoCaptureEnabled());
+        toggle.setOnCheckedChangeListener((view,checked)->{
+            if(!host.canInteract()){view.setOnCheckedChangeListener(null);view.setChecked(store.autoCaptureEnabled());dismiss();return;}
+            store.setAutoCaptureEnabled(checked);
+        });
+        LinearLayout box=column();box.addView(toggle,size(-1,-2));
+        TextView hint=text("켜면 바다·강·산길 구간이나 장소를 지날 때 자동으로 기록합니다. 지금은 샘플 기록이며 실제 차량 촬영은 하지 않습니다. 이 기기에만 저장됩니다.",12,MUTED,false);box.addView(hint);
+        return box;
+    }
+    public boolean autoCaptureEnabled(){return store.autoCaptureEnabled();}
+    /**
+     * Called when the route reaches a checkpoint. A passive record: no popup, camera or server request,
+     * and nothing happens unless the user turned automatic recording on.
+     */
+    public ScenicCaptureStore.Record saveCheckpointCapture(String routeId,String routeName,String destination,RouteCheckpoint checkpoint) {
+        try {
+            ScenicCaptureStore.Record record=store.saveAutomatic(routeId,routeName,destination,checkpoint,System.currentTimeMillis());
+            renderPanel();return record;
+        } catch(IllegalArgumentException|IllegalStateException blocked){return null;}
+    }
+    public int checkpointRecordCount(String routeId,List<RouteCheckpoint> checkpoints) {
+        java.util.ArrayList<String> ids=new java.util.ArrayList<>();for(RouteCheckpoint checkpoint:checkpoints)ids.add(checkpoint.id);
+        return routeId==null?0:store.countForCheckpoints(routeId,ids);
     }
     public void setSharingEnabled(boolean enabled){store.setSharingEnabled(enabled);}
     public int savedCount(String routeId){return store.recordsForRoute(routeId).size();}
@@ -174,12 +219,13 @@ public final class ScenicCaptureDemo {
         body.addView(sourceDetails(key));gap(body,16);body.addView(button("닫기",true,this::dismiss),size(-1,-2));showDialog(body);
     }
     private View sourceAction(String key) {
-        LinearLayout source=column();
+        LinearLayout source=column();if("none".equals(key))return source;
         TextView label=text(credit(key)+"  ·  출처 보기",12,MUTED,false);label.setPadding(0,dp(10),0,dp(10));label.setMinHeight(dp(44));label.setFocusable(true);
         TextView details=sourceDetails(key);details.setVisibility(View.GONE);source.addView(label);source.addView(details);
         label.setOnClickListener(v->{if(allowed())details.setVisibility(details.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE);});return source;
     }
     private TextView sourceDetails(String key) {
+        if("none".equals(key)){TextView none=text("이 구간의 샘플 사진이 없어 표시하지 않습니다. 실제 차량 촬영이 아닙니다.",12,MUTED,false);return none;}
         String url="haeundae".equals(key)?"https://commons.wikimedia.org/wiki/File:Busan_City_Haeundae_Beach.jpg":
             "gwangalli".equals(key)?"https://commons.wikimedia.org/wiki/File:Gwangalli_Beach_and_Gwangan_Bridge_Busan.jpg":"https://commons.wikimedia.org/wiki/File:Cheongsapo.jpg";
         String license="haeundae".equals(key)?"https://www.kogl.or.kr/info/licenseType1.do":"gwangalli".equals(key)?"https://creativecommons.org/licenses/by-sa/4.0/":"https://creativecommons.org/licenses/by-sa/3.0/";
@@ -210,8 +256,8 @@ public final class ScenicCaptureDemo {
     private boolean allowed(){if(host.canInteract())return true;toast("풍경 촬영과 미리보기는 정차 후 이용해 주세요.");dismiss();return false;}
     private void toast(String message){Toast.makeText(activity,message,Toast.LENGTH_SHORT).show();}
     private static String value(String value,String fallback){return value==null||value.trim().isEmpty()?fallback:value;}
-    private static String location(String key){return "gwangalli".equals(key)?"광안리와 광안대교":"coast".equals(key)?"청사포 해안":"해운대해수욕장";}
-    private static String credit(String key){return "gwangalli".equals(key)?"Masterhatch · CC BY-SA 4.0":"coast".equals(key)?"Andrewssi2 · CC BY-SA 3.0":"부산광역시 · 공공누리 제1유형";}
+    private static String location(String key){return "none".equals(key)?"촬영 구간":"gwangalli".equals(key)?"광안리와 광안대교":"coast".equals(key)?"청사포 해안":"해운대해수욕장";}
+    private static String credit(String key){return "none".equals(key)?"샘플 이미지 없음": "gwangalli".equals(key)?"Masterhatch · CC BY-SA 4.0":"coast".equals(key)?"Andrewssi2 · CC BY-SA 3.0":"부산광역시 · 공공누리 제1유형";}
     private int dp(float value){return Math.round(value*activity.getResources().getDisplayMetrics().density);}
     private LinearLayout column(){LinearLayout view=new LinearLayout(activity);view.setOrientation(LinearLayout.VERTICAL);return view;}
     private LinearLayout.LayoutParams size(int width,int height){return new LinearLayout.LayoutParams(width<0?width:dp(width),height<0?height:dp(height));}

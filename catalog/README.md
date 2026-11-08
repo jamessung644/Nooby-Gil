@@ -77,3 +77,11 @@ node --test tests/nationwide-catalog.test.mjs
 ```
 
 테스트는 지역 범위, 원자료와의 일치, 좌표, 근거리 조건, 섬 제외 규칙, 중복 집합과 단순 확장 방지, 추정식, Java 데이터 일치, 네트워크 없는 재생성을 확인한다.
+
+## scenery-grid.bin.gz · scenery-grid.json
+
+경로 주변 풍경(해안·큰 물가·터널·전망 포인트·큰 숲)을 250 m 격자로 담은 오프라인 데이터입니다. 서버의 `scenery-grid.mjs`가 선택된 풍경 길의 도로 주변을 측정해 근거 문구로만 사용하며, 어떤 길을 고를지는 바꾸지 않습니다. 파일이 없거나 손상되면 근거 문구 없이 기존 응답으로 동작합니다.
+
+- 출처: © OpenStreetMap contributors (ODbL), Geofabrik 한국 추출본 2026-11-06. 앱·문서에서 출처를 표기해야 합니다.
+- 다시 만드는 방법은 `tools/scenery-grid/README.md`를 보세요.
+- 한계: 도로에서 실제로 보이는지(건물·지형 가림)는 반영하지 않습니다. 숲은 OSM 입력 정도에 좌우됩니다.

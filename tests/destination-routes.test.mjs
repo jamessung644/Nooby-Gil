@@ -11,7 +11,7 @@ const input = { origin, destination, extraMinutes: 30, theme: 'coast' };
 const baseline = [[35.1152, 129.0422], [35.135, 129.075], [35.142, 129.125], [35.1587, 129.1604]];
 let requestId = 0;
 function request(pathname, payload, { fetchImpl = async () => { throw new Error('Unexpected fetch'); }, ...options } = {}) {
-  const server = createServer({ env, fetchImpl, ...options });
+  const server = createServer({ env, fetchImpl, scenery: null, courses: [], ...options });
   return new Promise((resolve) => {
     const req = Readable.from(payload === undefined ? [] : [Buffer.from(JSON.stringify(payload))]);
     Object.assign(req, { url: pathname, method: payload === undefined ? 'GET' : 'POST', headers: { host: '127.0.0.1:4173', 'content-type': 'application/json' }, socket: { remoteAddress: `destination-${requestId++}` } });
@@ -109,7 +109,8 @@ test('scenic extra time is compared before rounding and over-budget results retu
   assert.equal(result.status, 200);
   assert.equal(result.body.scenicStatus, 'no_feasible_route');
   assert.deepEqual(result.body.routes.map(route => route.id), ['fast']);
-  assert.ok(mock.calls.length > 1 && mock.calls.length <= 4);
+  // One baseline plus up to three candidates, each retried once when motorway avoidance runs over budget.
+  assert.ok(mock.calls.length > 1 && mock.calls.length <= 7);
   assert.ok(result.body.message);
 });
 
@@ -290,7 +291,7 @@ for (const { theme, label, title } of scenicFixtures) {
   });
 }
 
-test('all admits each of the six scenic categories without expanding the candidate or waypoint limits', async () => {
+test('all admits each of the six scenic categories, and stops at the same place never become two waypoints', async () => {
   for (const { title } of scenicFixtures) assert.equal(sceneCandidates('all', [title]).length, 1, title);
   const candidates = sceneCandidates('all', scenicFixtures.map(fixture => fixture.title));
   assert.equal(candidates.length, 3);
@@ -368,6 +369,101 @@ test('Oncheoncheon river park is water and city scenery without admitting hot-sp
   for (const title of ['도심 온천', '온천천 온천시설', '온천천 스파']) {
     assert.deepEqual(sceneCandidates('all', [title]), [], title);
   }
+});
+
+const twoScenes = [
+  { id: 'a-first', title: '해안 풍경 하나', lat: 35.11, lon: 129.05 },
+  { id: 'b-second', title: '해안 풍경 둘', lat: 35.11, lon: 129.15 },
+];
+// One stop is a short detour for 129.15 and a long one for 129.05; a pair passes both.
+function twoStopRouting({ pairSeconds = 2400, pairCode = 0, failPair = false } = {}) {
+  const calls = [];
+  const singleSeconds = { '129.05': 2400, '129.15': 1700 };
+  return { calls, fetchImpl: async url => {
+    const target = new URL(url); calls.push(target);
+    const waypoints = target.searchParams.get('waypoints');
+    if (!waypoints) return road(sceneBaseline, 1200, 20000);
+    const stops = waypoints.split('|').map(stop => stop.split(',').map(Number));
+    const via = stops.map(([lon, lat]) => [lat, lon]);
+    if (stops.length === 2) {
+      if (failPair) throw new Error('private-test-key');
+      return road([sceneBaseline[0], ...via, sceneBaseline.at(-1)], pairSeconds, 26000, pairCode);
+    }
+    return road([sceneBaseline[0], ...via, sceneBaseline.at(-1)], singleSeconds[String(stops[0][0])], 24000);
+  } };
+}
+
+test('two well-separated scenes become one ordered two-stop route within the extra time', async () => {
+  const mock = twoStopRouting();
+  const result = await planDestinationRoutes({ ...sceneTrip, theme: 'coast' }, { ...mock, env, catalog: { places: twoScenes } });
+  assert.equal(result.scenicStatus, 'ok');
+  assert.deepEqual(result.routes.map(route => route.id), ['fast', 'scenic']);
+  const scenic = result.routes[1];
+  assert.deepEqual(scenic.waypoints.map(stop => stop.id), ['a-first', 'b-second']);
+  assert.equal(scenic.title, '풍경 경로 · 2곳 경유');
+  assert.ok(scenic.durationMin * 60 <= 1200 + sceneTrip.extraMinutes * 60);
+  assert.equal(mock.calls.length, 4);
+  assert.equal(mock.calls.at(-1).searchParams.get('waypoints').split('|').length, 2);
+  assert.equal(mock.calls.at(-1).searchParams.get('avoid'), 'motorway|ferries');
+  assert.ok(scenic.scenicLabels.includes('해안 풍경 하나') && scenic.scenicLabels.includes('해안 풍경 둘'));
+  assert.equal(new Set(scenic.scenicLabels).size, scenic.scenicLabels.length);
+  assert.ok(scenic.scenicLabels.length <= 8);
+  assert.deepEqual(scenic.coordinates.at(-1), sceneBaseline.at(-1));
+});
+
+test('a pair that is over budget, unroutable or fails keeps the single stop with the best value for its extra time', async () => {
+  for (const options of [{ pairSeconds: 3300 }, { pairCode: 104 }, { failPair: true }]) {
+    const mock = twoStopRouting(options);
+    const result = await planDestinationRoutes({ ...sceneTrip, theme: 'coast' }, { ...mock, env, catalog: { places: twoScenes } });
+    assert.equal(result.scenicStatus, 'ok', JSON.stringify(options));
+    const scenic = result.routes[1];
+    // 129.15 costs 500 extra seconds against 1200 for 129.05, so it wins although it is not listed first.
+    assert.deepEqual(scenic.waypoints.map(stop => stop.id), ['b-second'], JSON.stringify(options));
+    assert.ok(!JSON.stringify(result).includes('private-test-key'));
+  }
+});
+
+test('a motorway-free road over the budget is retried once with motorways allowed and says so', async () => {
+  const calls = [];
+  const fetchImpl = async url => {
+    const target = new URL(url); calls.push(target);
+    if (!target.searchParams.has('waypoints')) return road(sceneBaseline, 1200, 20000);
+    const [lon, lat] = target.searchParams.get('waypoints').split(',').map(Number);
+    const avoidsMotorway = target.searchParams.get('avoid').includes('motorway');
+    return road([sceneBaseline[0], [lat, lon], sceneBaseline.at(-1)], avoidsMotorway ? 3500 : 1900, 24000);
+  };
+  const result = await planDestinationRoutes({ ...sceneTrip, theme: 'coast' }, { fetchImpl, env, catalog: { places: [scenePoint('해안 풍경')] } });
+  assert.equal(result.scenicStatus, 'ok');
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].searchParams.get('avoid'), 'motorway|ferries');
+  assert.equal(calls[2].searchParams.get('avoid'), 'ferries');
+  const scenic = result.routes[1];
+  assert.equal(scenic.durationMin * 60, 1900);
+  assert.ok(scenic.reason.includes('자동차 전용도로를 포함'));
+  assert.ok(!Object.hasOwn(scenic, 'motorway') && !Object.hasOwn(scenic, 'durationSeconds'));
+});
+
+test('a road within the budget is never retried and does not mention motorways', async () => {
+  const mock = twoStopRouting({ pairSeconds: 2400 });
+  const result = await planDestinationRoutes({ ...sceneTrip, theme: 'coast' }, { ...mock, env, catalog: { places: [twoScenes[1]] } });
+  assert.equal(mock.calls.length, 2);
+  assert.ok(!result.routes[1].reason.includes('자동차 전용도로'), 'only a road that needed motorways says so');
+});
+
+test('nearby scenes are never paired into two stops', async () => {
+  const mock = twoStopRouting();
+  const nearby = [twoScenes[0], { ...twoScenes[1], lon: 129.06 }];
+  const result = await planDestinationRoutes({ ...sceneTrip, theme: 'coast' }, { ...mock, env, catalog: { places: nearby } });
+  assert.equal(result.scenicStatus, 'ok');
+  assert.equal(result.routes[1].waypoints.length, 1);
+  assert.equal(mock.calls.length, 3);
+});
+
+test('a place with several scenery tags outranks a single-tag place at the same position for all', () => {
+  const [first] = selectScenicCandidates({ ...sceneTrip, theme: 'all', fast: { distanceKm: 20, coordinates: sceneBaseline } }, {
+    places: [scenePoint('해안 풍경', 'a-plain'), scenePoint('반포한강공원', 'z-rich')],
+  });
+  assert.equal(first.id, 'z-rich');
 });
 
 test('scenery keywords cannot admit indoor, hiking-only or offshore attractions', () => {

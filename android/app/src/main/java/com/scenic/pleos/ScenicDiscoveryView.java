@@ -2,12 +2,15 @@ package com.scenic.pleos;
 
 import android.app.*;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.*;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.view.*;
 import android.widget.*;
 import java.io.*;
 import java.util.*;
+import org.json.*;
 
 /** Region discovery first; real destination photos follow an explicit area selection. */
 public final class ScenicDiscoveryView {
@@ -21,10 +24,12 @@ public final class ScenicDiscoveryView {
         java.util.List<ScenicCaptureStore.Record> records();
         default String originLabel(){return "경로에서 선택한 출발지";}
     }
-    private static final int INK=0xff172323,MUTED=0xff687571,TEAL=0xff2d6659,LINE=0xffdce4df;
+    private static final int INK=0xff19332c,MUTED=0xff65766f,TEAL=0xff2c6656,LINE=0xffdee7e1,PANEL=0xffffffff,SOFT=0xffeaf1ec;
     private final Activity activity; private final Host host; private final SharedPreferences prefs;
     private String filter="전체"; private LinearLayout body; private boolean wide,samplesExpanded; private AlertDialog dialog;
+    private int cardColumns=1;
     private final Map<String,Bitmap> images=new HashMap<>();
+    private final Map<String,JSONObject> regionPhotos=new HashMap<>();
     private static final class Entry {
         final String id,name,subtitle,key,theme,label; final double lat,lon;
         Entry(String id,String name,String subtitle,String key,String theme,String label,double lat,double lon){this.id=id;this.name=name;this.subtitle=subtitle;this.key=key;this.theme=theme;this.label=label;this.lat=lat;this.lon=lon;}
@@ -34,76 +39,94 @@ public final class ScenicDiscoveryView {
         new Entry("126078","광안리해수욕장","도시와 바다가 만나는 해안 드라이브","gwangalli","coast","도시",35.1531932737,129.1189760936),
         new Entry("cheongsapo","청사포","작은 항구에서 마무리하는 바닷길","coast","coast","바다",35.16051,129.19129)
     };
-    public ScenicDiscoveryView(Activity activity,Host host){this.activity=activity;this.host=host;this.prefs=activity.getSharedPreferences("scenic_discovery",0);}
-    public View createView(boolean wide){this.wide=wide;body=col();body.setPadding(0,0,0,dp(24));render();ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);scroll.addView(body);return scroll;}
+    public ScenicDiscoveryView(Activity activity,Host host){this.activity=activity;this.host=host;this.prefs=activity.getSharedPreferences("scenic_discovery",0);loadRegionPhotos();}
+    private void loadRegionPhotos(){try(InputStream input=activity.getAssets().open("scenic-regions/manifest.json")){ByteArrayOutputStream bytes=new ByteArrayOutputStream();byte[] buffer=new byte[4096];int count;while((count=input.read(buffer))!=-1){if(bytes.size()+count>65536)return;bytes.write(buffer,0,count);}JSONArray photos=new JSONObject(bytes.toString("UTF-8")).getJSONArray("photos");for(int i=0;i<photos.length();i++){JSONObject photo=photos.getJSONObject(i);String id=photo.getString("regionId");if(DriveRegion.byId(id)!=null&&photo.getString("file").equals(id+".jpg")&&ScenicPhotoCollection.safeImageUrl(photo.getString("originalUrl")))regionPhotos.put(id,photo);}}catch(Exception ignored){regionPhotos.clear();}}
+    public View createView(boolean wide){
+        this.wide=wide;cardColumns=regionColumns(activity.getResources().getConfiguration().screenWidthDp-48);
+        body=col();body.setPadding(0,0,0,dp(24));render();
+        LinearLayout viewBody=body;
+        ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);scroll.addView(body);
+        scroll.addOnLayoutChangeListener((view,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom)->{
+            if(body!=viewBody||right<=left||right-left==oldRight-oldLeft)return;
+            int columns=regionColumns(Math.round((right-left)/activity.getResources().getDisplayMetrics().density));
+            if(columns!=cardColumns){cardColumns=columns;viewBody.post(()->{if(body==viewBody)render();});}
+        });
+        return scroll;
+    }
+    private int regionColumns(int widthDp){int minimum=Math.round(330*Math.max(1f,activity.getResources().getConfiguration().fontScale));return Math.max(1,Math.min(3,(widthDp+16)/(minimum+16)));}
     private void render(){
         if(body==null)return;body.removeAllViews();
-        LinearLayout hero=wide?row():col();hero.setGravity(Gravity.TOP);
-        LinearLayout intro=col();intro.setPadding(dp(8),dp(10),dp(24),dp(12));
-        intro.addView(text("A PLACE TO GO, A VIEW TO REMEMBER",12,TEAL,true));gap(intro,10);
-        intro.addView(text("어디로 떠나고 싶나요?",wide?34:29,INK,true));gap(intro,10);
-        intro.addView(text("지역을 먼저 고르고, 실제 풍경 사진으로 갈 곳을 정해요.",17,MUTED,false));
-        if(wide)hero.addView(intro,new LinearLayout.LayoutParams(0,-2,1.5f));else hero.addView(intro,size(-1,-2));
-        LinearLayout search=col();search.setPadding(dp(14),dp(12),dp(14),dp(12));
-        search.addView(button("다른 지역 검색하기  ⌕",true,host::searchRegion),size(-1,-2));gap(search,6);
-        search.addView(text("도시·여행 지역 이름으로 풍경을 찾아보세요.",12,MUTED,false));
-        if(wide)hero.addView(search,new LinearLayout.LayoutParams(0,-2,1));else hero.addView(search,size(-1,-2));
-        body.addView(hero,size(-1,-2));gap(body,18);
+        boolean roomy=cardColumns>1;
+        LinearLayout hero=roomy?row():col();hero.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout intro=col();intro.addView(text("어디로 떠나고 싶나요?",28,INK,true));gap(intro,8);
+        intro.addView(text("지역을 고르면, AI가 주변 풍경을 찾아요.",17,MUTED,false));
+        if(roomy){hero.addView(intro,new LinearLayout.LayoutParams(0,-2,1));space(hero,24);}else{hero.addView(intro,size(-1,-2));gap(hero,16);}
+        LinearLayout search=row();search.addView(button("지역 검색",true,host::searchRegion),new LinearLayout.LayoutParams(0,-2,1));space(search,8);
+        search.addView(button("AI 코스 찾기",false,host::openAiPlanner),new LinearLayout.LayoutParams(0,-2,1));
+        hero.addView(search,roomy?size(316,-2):size(-1,-2));body.addView(hero,size(-1,-2));gap(body,24);
 
-        LinearLayout steps=wide?row():col();steps.setPadding(dp(18),dp(15),dp(18),dp(15));steps.setBackground(bg(0xffe6eee7,0));
-        addStep(steps,"01","지역","바다·산·도시 중 끌리는 곳");
-        addStep(steps,"02","풍경","사진 속 장소를 목적지로");
-        addStep(steps,"03","맛집·주차","도착지 근처에서 한 끼까지");body.addView(steps,size(-1,-2));gap(body,23);
-
-        body.addView(text("오늘의 드라이브 지역",23,INK,true));gap(body,7);
-        body.addView(text("지역을 고르면 주변 공개 사진을 불러와요. 아래 카드는 여행 테마를 담은 일러스트입니다.",13,MUTED,false));gap(body,14);
-        LinearLayout filters=row();for(String label:new String[]{"전체","바다","산·강","도시"}){filters.addView(button(label,filter.equals(label),()->{filter=label;render();}));space(filters,8);}
-        HorizontalScrollView filterScroll=new HorizontalScrollView(activity);filterScroll.setHorizontalScrollBarEnabled(false);filterScroll.addView(filters);body.addView(filterScroll);gap(body,16);
         List<DriveRegion> shown=new ArrayList<>();for(DriveRegion region:DriveRegion.ALL)if(region.matchesFilter(filter))shown.add(region);
-        int columns=wide?3:1;
+        LinearLayout heading=roomy?row():col();
+        TextView sectionTitle=text("드라이브 지역  ·  "+shown.size()+"곳",22,INK,true);
+        if(roomy)heading.addView(sectionTitle,new LinearLayout.LayoutParams(0,-2,1));else{heading.addView(sectionTitle);gap(heading,12);}
+        LinearLayout filters=row();for(String label:new String[]{"전체","바다","산·강","도시"}){
+            if(filters.getChildCount()>0)space(filters,8);
+            TextView chip=button(label,false,()->{filter=label;render();});boolean selected=filter.equals(label);
+            chip.setTextSize(15);chip.setTextColor(selected?TEAL:MUTED);chip.setSelected(selected);
+            chip.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656),bg(selected?SOFT:PANEL,selected?TEAL:LINE,12),null));
+            chip.setContentDescription(label+" 지역"+(selected?" · 선택됨":""));filters.addView(chip);
+        }
+        HorizontalScrollView filterScroll=new HorizontalScrollView(activity);filterScroll.setHorizontalScrollBarEnabled(false);filterScroll.addView(filters);
+        heading.addView(filterScroll,roomy?size(-2,-2):size(-1,-2));body.addView(heading,size(-1,-2));gap(body,8);
+        body.addView(text("풍경 사진에서 갈 곳을 고르고, 맛집·주차까지 이어가세요.",14,MUTED,false));gap(body,16);
+        int columns=cardColumns;
         for(int index=0;index<shown.size();){
-            LinearLayout line=wide?row():col();line.setGravity(Gravity.TOP);
+            LinearLayout line=row();line.setGravity(Gravity.TOP);
             for(int col=0;col<columns;col++){
-                if(col>0)space(line,14);
-                if(index<shown.size())line.addView(regionCard(shown.get(index++)),wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));
+                if(col>0)space(line,16);
+                if(index<shown.size())line.addView(regionCard(shown.get(index++)),new LinearLayout.LayoutParams(0,-2,1));
                 else line.addView(new View(activity),new LinearLayout.LayoutParams(0,1,1));
             }
-            body.addView(line,size(-1,-2));gap(body,16);
+            body.addView(line,size(-1,-2));gap(body,24);
         }
-        body.addView(text("지역은 사진을 찾는 탐색 중심이에요. 방문할 장소와 도로 경로는 다음 단계에서 선택합니다.",12,MUTED,false));gap(body,28);
+        body.addView(text("지역은 사진을 찾는 기준점이에요. 방문할 장소와 도로 경로는 다음 단계에서 선택해요.",14,MUTED,false));gap(body,24);
 
-        LinearLayout extra=wide?row():col();extra.setGravity(Gravity.TOP);
-        LinearLayout recap=col();recap.setPadding(dp(20),dp(19),dp(20),dp(19));recap.setBackground(bg(0xffedf1eb,0));
-        recap.addView(text("다녀온 뒤에는, 나의 월간 리캡",21,INK,true));gap(recap,8);
-        recap.addView(text("내 영상을 골라 음악과 한 줄의 기억을 더해요.",14,MUTED,false));gap(recap,14);recap.addView(button("내 영상으로 리캡 만들기",false,host::openRecap),size(-1,-2));
-        LinearLayout tools=col();tools.setPadding(dp(20),dp(19),dp(20),dp(19));tools.setBackground(bg(0xffffffff,LINE));tools.addView(text("이미 갈 곳을 정했다면",21,INK,true));gap(tools,8);
-        tools.addView(text("정해둔 목적지의 경로나 주변 식당을 살펴보세요.",14,MUTED,false));gap(tools,14);
-        LinearLayout actions=row();actions.addView(button("목적지 검색",false,host::searchDestination),new LinearLayout.LayoutParams(0,-2,1));space(actions,8);actions.addView(button("맛집·주차",false,host::openNearby),new LinearLayout.LayoutParams(0,-2,1));tools.addView(actions);
-        if(wide){extra.addView(recap,new LinearLayout.LayoutParams(0,-2,1));space(extra,16);extra.addView(tools,new LinearLayout.LayoutParams(0,-2,1));}else{extra.addView(recap,size(-1,-2));gap(extra,14);extra.addView(tools,size(-1,-2));}body.addView(extra,size(-1,-2));gap(body,22);
-        body.addView(button(samplesExpanded?"부산 샘플·내 관찰 기록 접기  −":"부산 샘플·내 관찰 기록 펼치기  ＋",false,()->{samplesExpanded=!samplesExpanded;render();}),size(-1,-2));
+        LinearLayout tools=col();tools.setPadding(dp(20),dp(20),dp(20),dp(20));tools.setBackground(bg(SOFT,0));
+        tools.addView(text("나의 드라이브 이어가기",22,INK,true));gap(tools,8);
+        tools.addView(text("정해둔 목적지를 찾거나, 다녀온 영상을 리캡으로 남겨보세요.",17,MUTED,false));gap(tools,16);
+        LinearLayout actions=roomy?row():col();
+        addUtility(actions,"목적지 검색",host::searchDestination,roomy);addUtility(actions,"맛집·주차 찾기",host::openNearby,roomy);addUtility(actions,"내 영상으로 리캡",host::openRecap,roomy);
+        tools.addView(actions,size(-1,-2));body.addView(tools,size(-1,-2));gap(body,24);
+        body.addView(button(samplesExpanded?"부산 샘플·내 관찰 기록  −":"부산 샘플·내 관찰 기록  ＋",false,()->{samplesExpanded=!samplesExpanded;render();}),size(-1,-2));
         if(samplesExpanded)renderSamples();
     }
-
-    private void addStep(LinearLayout steps,String number,String title,String description){
-        LinearLayout step=row();step.setPadding(dp(4),dp(5),dp(12),dp(5));TextView index=text(number,21,TEAL,true);step.addView(index);space(step,12);
-        LinearLayout content=col();content.addView(text(title,17,INK,true));gap(content,4);content.addView(text(description,12,MUTED,false));step.addView(content,new LinearLayout.LayoutParams(0,-2,1));
-        steps.addView(step,wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));
-    }
+    private void addUtility(LinearLayout actions,String label,Runnable action,boolean horizontal){if(actions.getChildCount()>0){if(horizontal)space(actions,8);else gap(actions,8);}actions.addView(button(label,false,action),horizontal?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));}
     private View regionCard(DriveRegion region){
-        LinearLayout card=col();card.setPadding(dp(15),dp(15),dp(15),dp(17));card.setBackground(bg(0xffffffff,LINE));
-        FrameLayout artwork=new FrameLayout(activity);artwork.setBackground(bg(0xffe7eeeb,0));artwork.setClipToOutline(true);artwork.addView(new RegionIllustration(region),new FrameLayout.LayoutParams(-1,-1));
-        TextView theme=text(region.driveTheme,15,INK,true);theme.setPadding(dp(15),dp(12),dp(15),dp(12));artwork.addView(theme,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));card.addView(artwork,size(-1,110));gap(card,14);
-        card.addView(text(region.name,26,INK,true));gap(card,8);TextView landscape=text(region.scenery,14,MUTED,false);landscape.setMinHeight(dp(39));card.addView(landscape);gap(card,9);
-        card.addView(text("함께 맛볼 것  ·  "+region.foodLabel(),13,TEAL,true));gap(card,8);
-        card.addView(text("탐색 기준  ·  "+region.centerLabel,12,MUTED,false));gap(card,14);
-        card.addView(button("이 지역 풍경 보기  →",true,()->choose(region)),size(-1,-2));gap(card,8);
-        TextView source=button("지역·먹거리 정보",false,()->regionInfo(region));source.setTextSize(12);source.setPadding(dp(10),dp(10),dp(10),dp(10));card.addView(source,size(-1,-2));return card;
+        LinearLayout card=col();card.setBackground(bg(PANEL,LINE));card.setClipToOutline(true);
+        FrameLayout artwork=new FrameLayout(activity);artwork.setBackgroundColor(SOFT);
+        JSONObject photoInfo=regionPhotos.get(region.id);boolean loaded=false;
+        if(photoInfo!=null)try{String key="region:"+region.id;Bitmap bitmap=images.get(key);if(bitmap==null){try(InputStream input=activity.getAssets().open("scenic-regions/"+region.id+".jpg")){bitmap=BitmapFactory.decodeStream(input);}if(bitmap!=null)images.put(key,bitmap);}if(bitmap!=null){ImageView image=new ImageView(activity);image.setScaleType(ImageView.ScaleType.CENTER_CROP);image.setImageBitmap(bitmap);image.setContentDescription(region.name+" · "+photoInfo.optString("placeName")+" 실제 공개 사진");artwork.addView(image,new FrameLayout.LayoutParams(-1,-1));loaded=true;}}catch(Exception ignored){}
+        if(!loaded)artwork.addView(new RegionIllustration(region),new FrameLayout.LayoutParams(-1,-1));
+        View shade=new View(activity);shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x0010231c,0xe619332c}));artwork.addView(shade,new FrameLayout.LayoutParams(-1,dp(120),Gravity.BOTTOM));
+        LinearLayout caption=col();caption.setPadding(dp(20),dp(16),dp(20),dp(18));caption.addView(text(region.name,26,PANEL,true));gap(caption,4);caption.addView(text(region.driveTheme,15,PANEL,false));
+        artwork.addView(caption,new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM));card.addView(artwork,size(-1,cardColumns==3?190:cardColumns==2?210:230));
+        LinearLayout details=col();details.setPadding(dp(20),dp(16),dp(20),dp(20));
+        TextView credit=text(loaded?photoInfo.optString("placeName")+" · 한국관광공사":"여행 테마 일러스트 · 사진을 읽지 못했어요",14,MUTED,false);credit.setMinHeight(dp(40));details.addView(credit);gap(details,12);
+        TextView landscape=text(region.scenery,17,INK,false);landscape.setMinHeight(dp(48));details.addView(landscape);gap(details,8);
+        details.addView(text("맛집 키워드  ·  "+region.foodLabel(),14,TEAL,true));gap(details,16);
+        LinearLayout actions=row();actions.addView(button("풍경 사진 보기  →",true,()->choose(region)),new LinearLayout.LayoutParams(0,-2,1));space(actions,8);
+        TextView source=button("출처",false,()->regionInfo(region));source.setTextSize(14);source.setContentDescription(region.name+" 지역·사진 출처 보기");actions.addView(source,size(72,-2));details.addView(actions,size(-1,-2));
+        card.addView(details,size(-1,-2));return card;
     }
     private void choose(DriveRegion region){if(!allowed())return;pause();try{host.chooseRegion(region.toDestination());}catch(Exception invalid){Toast.makeText(activity,"지역 정보를 확인하지 못했어요. 다른 지역을 선택해 주세요.",Toast.LENGTH_SHORT).show();}}
     private void regionInfo(DriveRegion region){
-        if(!allowed())return;pause();dialog=new AlertDialog.Builder(activity).setTitle(region.name+" · 여행 힌트")
-                .setMessage(region.scenery+"\n"+region.driveTheme+"\n\n함께 맛볼 음식: "+region.foodLabel()+"\n\n공식 관광 자료를 참고한 지역 소개입니다. 식당의 영업 여부·메뉴·주차 가능 여부는 방문할 장소를 선택한 뒤 확인해 주세요.\n\n탐색 기준점은 지역 사진 검색용이며 사진 촬영 지점이나 최종 목적지가 아닙니다.\n\n"+region.officialSource)
-                .setPositiveButton("관광 정보 열기",(d,w)->openOfficial(region.officialSourceUrl)).setNeutralButton("음식 정보 열기",(d,w)->openOfficial(region.foodSourceUrl)).setNegativeButton("닫기",null).show();
+        if(!allowed())return;pause();JSONObject photo=regionPhotos.get(region.id);
+        String credit=photo==null?"사진을 읽지 못해 여행 테마 일러스트를 표시합니다.":photo.optString("placeName")+"\n한국관광공사 TourAPI 제공 · "+photo.optString("license")+"\n"+photo.optString("photographer")+"\n확인일: "+photo.optString("fetchedAt").substring(0,10)+"\n가로세로 비율 유지 축소·JPEG 압축, 카드 중앙 맞춤 표시\n정확한 촬영 지점·방향·시기는 미확인";
+        AlertDialog.Builder builder=new AlertDialog.Builder(activity).setTitle(region.name+" · 여행과 사진")
+                .setMessage(region.scenery+"\n"+region.driveTheme+"\n\n함께 맛볼 음식: "+region.foodLabel()+"\n\n사진: "+credit+"\n\n사진 탐색 기준: "+region.centerLabel+"\n탐색 기준점은 지역 사진 검색용이며 사진 촬영 지점이나 최종 목적지가 아닙니다.\n\n지역·음식 자료: "+region.officialSource+"\n"+region.foodSourceUrl)
+                .setPositiveButton("관광 정보 열기",(d,w)->openOfficial(region.officialSourceUrl)).setNegativeButton("닫기",null);
+        if(photo!=null)builder.setNeutralButton("사진 원본·출처",(d,w)->openOfficial(photo.optString("originalUrl")));
+        dialog=builder.show();
     }
     private void openOfficial(String url){if(!allowed())return;try{activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,android.net.Uri.parse(url)));}catch(Exception unavailable){Toast.makeText(activity,"링크를 열 수 있는 앱이 없어요.",Toast.LENGTH_SHORT).show();}}
     private final class RegionIllustration extends View {
@@ -166,13 +189,14 @@ public final class ScenicDiscoveryView {
     private static String credit(String key){return "gwangalli".equals(key)?"사진 Masterhatch · CC BY-SA 4.0":"coast".equals(key)?"사진 Andrewssi2 · CC BY-SA 3.0":"사진 부산광역시 · 공공누리 제1유형";}
     private boolean allowed(){return host.canInteract()&&!activity.isFinishing();}
     public void pause(){if(dialog!=null){dialog.dismiss();dialog=null;}}
-    public void destroy(){pause();images.clear();}
+    public void destroy(){pause();body=null;images.clear();}
     private int dp(int n){return Math.round(n*activity.getResources().getDisplayMetrics().density);}
     private LinearLayout col(){LinearLayout l=new LinearLayout(activity);l.setOrientation(1);return l;}
     private LinearLayout row(){LinearLayout l=col();l.setOrientation(0);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
     private LinearLayout.LayoutParams size(int w,int h){return new LinearLayout.LayoutParams(w<0?w:dp(w),h<0?h:dp(h));}
     private void gap(LinearLayout l,int n){l.addView(new View(activity),size(1,n));}private void space(LinearLayout l,int n){l.addView(new View(activity),size(n,1));}
-    private GradientDrawable bg(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(14));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
+    private GradientDrawable bg(int color,int stroke){return bg(color,stroke,16);}
+    private GradientDrawable bg(int color,int stroke,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
     private TextView text(String s,int sp,int color,boolean bold){TextView t=new TextView(activity);t.setText(s);t.setTextSize(sp);t.setTextColor(color);t.setTypeface(ScenicTypography.font(activity,bold?600:400));t.setLineSpacing(dp(3),1);t.setIncludeFontPadding(false);return t;}
-    private TextView button(String s,boolean primary,Runnable run){TextView t=text(s,15,primary?0xffffffff:INK,true);t.setPadding(dp(16),dp(14),dp(16),dp(14));t.setMinHeight(dp(54));t.setGravity(Gravity.CENTER);t.setBackground(bg(primary?TEAL:0xffffffff,primary?0:LINE));t.setFocusable(true);t.setOnClickListener(v->{if(allowed())run.run();});return t;}
+    private TextView button(String s,boolean primary,Runnable run){TextView t=text(s,17,primary?PANEL:INK,true);t.setPadding(dp(16),dp(14),dp(16),dp(14));t.setMinHeight(dp(56));t.setGravity(Gravity.CENTER);t.setBackground(new RippleDrawable(ColorStateList.valueOf(primary?0x28ffffff:0x182c6656),bg(primary?TEAL:PANEL,primary?0:LINE,12),null));t.setFocusable(true);t.setContentDescription(s);t.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View host,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(host,info);info.setClassName(Button.class.getName());}});t.setOnClickListener(v->{if(allowed())run.run();});return t;}
 }

@@ -15,18 +15,22 @@ import org.json.JSONObject;
 /** Validates two road alternatives with exactly the same requested destination. */
 public final class DestinationRoutePlan {
     public static final String ROAD_SOURCE="Kakao Mobility";
+    static final int MAX_SCENIC_WAYPOINTS=2;
     public final DestinationPlace destination;
     public final double originLat,originLon;
     public final int extraMinutes;
     public final String theme,scenicStatus,message;
     public final List<Route> routes;
-    public final Route fast,scenic;
+    public final Route fast,scenic,curated;
 
     private DestinationRoutePlan(DestinationPlace destination,double lat,double lon,int extraMinutes,String theme,
                                  String status,String message,List<Route> routes) {
         this.destination=destination;originLat=lat;originLon=lon;this.extraMinutes=extraMinutes;
         this.theme=theme;scenicStatus=status;this.message=message;
-        this.routes=Collections.unmodifiableList(routes);fast=routes.get(0);scenic=routes.size()==2?routes.get(1):null;
+        this.routes=Collections.unmodifiableList(routes);fast=routes.get(0);
+        Route foundScenic=null,foundCurated=null;
+        for(Route route:routes){if("scenic".equals(route.id))foundScenic=route;else if("curated".equals(route.id))foundCurated=route;}
+        scenic=foundScenic;curated=foundCurated;
     }
 
     public static final class Route {
@@ -35,19 +39,27 @@ public final class DestinationRoutePlan {
         public final double[][] coordinates;
         public final List<String> scenicLabels;
         public final List<CourseEngine.Spot> waypoints;
+        /** Places along the road worth a clip, in driving order. Empty when the server sent none. */
+        public final List<RouteCheckpoint> checkpoints;
+        /** One short line for the route card. Empty when the server sent none. */
+        public final String headline;
         private final DestinationPlace destination;
         private final double originLat,originLon;
         private final String theme;
 
         private Route(String id,String title,String reason,double distance,double duration,double[][] coordinates,
-                      List<String> labels,List<CourseEngine.Spot> waypoints,DestinationPlace destination,
+                      List<String> labels,List<CourseEngine.Spot> waypoints,List<RouteCheckpoint> checkpoints,String headline,DestinationPlace destination,
                       double originLat,double originLon,String theme) {
+            this.checkpoints=checkpoints;this.headline=headline;
             this.id=id;this.title=title;this.reason=reason;source=ROAD_SOURCE;
             distanceKm=distance;durationMin=duration;this.coordinates=coordinates;
             scenicLabels=Collections.unmodifiableList(labels);this.waypoints=Collections.unmodifiableList(waypoints);
             this.destination=destination;this.originLat=originLat;this.originLon=originLon;this.theme=theme;
         }
 
+        public boolean isFast(){return "fast".equals(id);}
+        /** Name shown for this kind of road. */
+        public String label(){return "fast".equals(id)?"빠른 길":"curated".equals(id)?"추천 코스 길":"풍경 길";}
         /** Adapter for the existing map, saved moments and music, with no added visit time. */
         public CourseEngine.Course toCourse(){return toCourse("요청한 출발지");}
         public CourseEngine.Course toCourse(String originLabel){
@@ -57,9 +69,9 @@ public final class DestinationRoutePlan {
             spots[0]=new CourseEngine.Spot(originLabel.trim(),"경로 조회 출발 좌표",originLat,originLon);
             for(int i=0;i<waypoints.size();i++)spots[i+1]=waypoints.get(i);
             spots[spots.length-1]=new CourseEngine.Spot(destination.name,destination.address.isEmpty()?"선택한 목적지":destination.address,destination.lat,destination.lon);
-            String tag="fast".equals(id)?"빠른 길":"풍경 길";
+            String tag=label();
             // A fast route has no verified scenery match; the requested preference is not route evidence.
-            String scene="scenic".equals(id)?theme:"all";
+            String scene="fast".equals(id)?"all":theme;
             String identity=destination.id+"|"+destination.lat+"|"+destination.lon+"|"+originLat+"|"+originLon+"|"+theme;
             for(CourseEngine.Spot waypoint:waypoints)identity+="|"+waypoint.title.length()+":"+waypoint.title+"|"+waypoint.lat+"|"+waypoint.lon;
             String courseId="destination-"+UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8))+"-"+id;
@@ -86,12 +98,20 @@ public final class DestinationRoutePlan {
         if(!"ok".equals(status)&&!"no_candidates".equals(status)&&!"no_feasible_route".equals(status)
                 &&!"provider_unavailable".equals(status)&&!"disabled".equals(status))throw invalid();
         JSONArray raw=response.getJSONArray("routes");
-        if(raw.length()<1||raw.length()>2||("ok".equals(status)!=(raw.length()==2))
+        // The fast road, then an optional recommended-course road and an optional computed scenic road.
+        if(raw.length()<1||raw.length()>3||("ok".equals(status)!=(raw.length()>=2))
                 ||(extraMinutes==0&&!"disabled".equals(status))||("disabled".equals(status)&&extraMinutes!=0))throw invalid();
         List<Route> routes=new ArrayList<>();
-        for(int i=0;i<raw.length();i++)routes.add(parseRoute(raw.getJSONObject(i),i==0?"fast":"scenic",expected,originLat,originLon,theme,expectedScenicPlace));
+        for(int i=0;i<raw.length();i++){
+            String id=i==0?"fast":raw.getJSONObject(i).optString("id");
+            if(i>0){
+                boolean ordered="curated".equals(id)?i==1:"scenic".equals(id)&&(i==1||"curated".equals(routes.get(1).id));
+                if(!ordered||(expectedScenicPlace!=null&&!"scenic".equals(id)))throw invalid();
+            }
+            routes.add(parseRoute(raw.getJSONObject(i),id,expected,originLat,originLon,theme,expectedScenicPlace));
+        }
         // Provider durations originate as whole seconds. Permit only floating-point roundoff.
-        if(routes.size()==2&&routes.get(1).durationMin*60>routes.get(0).durationMin*60+extraMinutes*60+0.000001)throw invalid();
+        for(int i=1;i<routes.size();i++)if(routes.get(i).durationMin*60>routes.get(0).durationMin*60+extraMinutes*60+0.000001)throw invalid();
         return new DestinationRoutePlan(expected,originLat,originLon,extraMinutes,theme,status,message,routes);
     }
 
@@ -137,19 +157,26 @@ public final class DestinationRoutePlan {
             if(!uniqueLabels.add(value))throw invalid();labels.add(value);
         }
         JSONArray rawWaypoints=object.getJSONArray("waypoints");
-        if(("fast".equals(id)&&rawWaypoints.length()!=0)||("scenic".equals(id)&&rawWaypoints.length()!=1))throw invalid();
-        List<CourseEngine.Spot> waypoints=new ArrayList<>();
+        // A scenic road passes one or two places, the most the native navigation accepts. A photo selection is exactly one.
+        int stops=rawWaypoints.length();
+        if(("fast".equals(id)&&stops!=0)||("scenic".equals(id)&&(stops<1||stops>MAX_SCENIC_WAYPOINTS||(expectedScenicPlace!=null&&stops!=1)))
+                ||("curated".equals(id)&&(stops<1||stops>MAX_SCENIC_WAYPOINTS||expectedScenicPlace!=null)))throw invalid();
+        List<CourseEngine.Spot> waypoints=new ArrayList<>();Set<String> waypointIds=new HashSet<>();
         for(int i=0;i<rawWaypoints.length();i++){
             JSONObject point=rawWaypoints.getJSONObject(i);String name=text(point,"name",200);
             String waypointId=text(point,"id",100),waypointSource=text(point,"source",80);
-            if(!waypointId.matches("[A-Za-z0-9_-]{1,100}")||!"한국관광공사 TourAPI".equals(waypointSource))throw invalid();
+            if(!waypointId.matches("[A-Za-z0-9_-]{1,100}")||!"한국관광공사 TourAPI".equals(waypointSource)||!waypointIds.add(waypointId))throw invalid();
             double lat=number(point,"lat",33,38.65),lon=number(point,"lon",124.5,131.95);
             if(expectedScenicPlace!=null&&(!waypointId.equals(expectedScenicPlace.id)||!name.equals(expectedScenicPlace.name)
                     ||!same(lat,expectedScenicPlace.lat)||!same(lon,expectedScenicPlace.lon)))throw invalid();
             if(distanceToRoute(lat,lon,coordinates,originLat)>(expectedScenicPlace==null?700.000001:150.000001))throw invalid();
             waypoints.add(new CourseEngine.Spot(name,"풍경 길 통과 지점 · 별도 체류 시간 없음 · "+waypointSource,lat,lon));
         }
-        return new Route(id,title,reason,distance,duration,coordinates,labels,waypoints,destination,originLat,originLon,theme);
+        // The fast road has no scenery checkpoints; a malformed list rejects the whole response.
+        List<RouteCheckpoint> checkpoints=RouteCheckpoint.parseAll(object);
+        if("fast".equals(id)&&!checkpoints.isEmpty())throw invalid();
+        String headline=object.has("headline")?text(object,"headline",120):"";
+        return new Route(id,title,reason,distance,duration,coordinates,labels,waypoints,checkpoints,headline,destination,originLat,originLon,theme);
     }
 
     static boolean validTheme(String theme){

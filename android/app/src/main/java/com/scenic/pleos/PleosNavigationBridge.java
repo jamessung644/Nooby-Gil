@@ -27,6 +27,7 @@ public final class PleosNavigationBridge {
     public interface Host {
         boolean canInteract();
         void onNavigationStatus(String message);
+        default void onNavigationRequested(DestinationPlace destination,List<DestinationPlace> waypoints){}
     }
     private static final String SERVICE="ai.pleos.playground.service.navi";
     private static final String ACTION="ai.pleos.playground.intent.action.NAVI_START";
@@ -124,6 +125,7 @@ public final class PleosNavigationBridge {
             sent=true;
             if(points.isEmpty())helper.requestRoute(target);
             else helper.requestRouteWithWaypoints(new RouteWithWaypointsRequest(target,points));
+            host.onNavigationRequested(plan.destination,plan.waypoints);
             update("순정 내비에 경로를 요청했어요. 차량의 현재 위치에서 다시 탐색하며, 내비에서 최종 경로를 확인해 주세요.");
             if(host.canInteract())helper.requestNavigationScreen(NavigationScreenRequest.Foreground.INSTANCE);
             // Some Navigation versions publish route results only after the foreground screen loads.

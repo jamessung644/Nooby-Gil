@@ -1,0 +1,21 @@
+{
+  "W": 2702,
+  "H": 2583,
+  "LAT0": 33,
+  "LON0": 124.5,
+  "dLat": 0.0022457779374775422,
+  "dLon": 0.0027759341930915144,
+  "CELL": 250,
+  "version": 2,
+  "generatedAt": "2026-11-07",
+  "source": "OpenStreetMap contributors (ODbL), Geofabrik south-korea extract 2026-11-06; relief from Terrarium elevation tiles (AWS Terrain Tiles: SRTM, NED and others)",
+  "bits": {
+    "coast": 1,
+    "water": 2,
+    "forest": 4,
+    "viewpoint": 8,
+    "tunnel": 16,
+    "mountain": 32
+  },
+  "notes": "250 m cells. water = lakes/reservoirs/riverbank >= ~0.4 km2. forest = >= ~1.5 km2. mountain = >=250 m relief within about 0.75 km of the cell centre (land only)."
+}

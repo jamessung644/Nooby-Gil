@@ -4,6 +4,8 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {ApiError,providerStatus,fetchRoadRoute,fetchPlaces} from './providers.mjs';
 import {createScenicSelectionSigner} from './scenic-photos.mjs';
+import {loadSceneryGrid} from './scenery-grid.mjs';
+import {loadDriveCourses} from './drive-courses.mjs';
 const root=path.resolve(fileURLToPath(new URL('../web/',import.meta.url)));
 const insideRoot=file=>file===root||file.startsWith(root+path.sep);
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp','.jpg':'image/jpeg','.mp3':'audio/mpeg','.wav':'audio/wav','.woff2':'font/woff2','.ttf':'font/ttf'};
@@ -16,7 +18,7 @@ async function readJson(req){
   // Decode once: a network chunk can end in the middle of a Korean UTF-8 character.
   try{return JSON.parse(Buffer.concat(chunks,bytes).toString('utf8'));}catch{throw new ApiError('JSON 형식이 올바르지 않습니다.');}
 }
-export function createServer({env=process.env,fetchImpl=fetch}={}){
+export function createServer({env=process.env,fetchImpl=fetch,scenery=loadSceneryGrid(),courses=loadDriveCourses()}={}){
   const selectionSigner=createScenicSelectionSigner();
   return http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
@@ -35,7 +37,7 @@ export function createServer({env=process.env,fetchImpl=fetch}={}){
         if(url.pathname==='/api/nearby'&&req.method==='GET'){
           if(!url.searchParams.has('lat')||!url.searchParams.has('lon'))throw new ApiError('검색할 위치가 필요합니다.');
           const {searchNearby}=await import('./nearby.mjs');
-          return json(res,200,await searchNearby({kind:url.searchParams.get('kind'),lat:Number(url.searchParams.get('lat')),lon:Number(url.searchParams.get('lon')),...(url.searchParams.has('query')?{query:url.searchParams.get('query')}:{})},{env,fetchImpl}));
+          return json(res,200,await searchNearby({kind:url.searchParams.get('kind'),lat:Number(url.searchParams.get('lat')),lon:Number(url.searchParams.get('lon')),...(url.searchParams.has('query')?{query:url.searchParams.get('query')}:{}),...(url.searchParams.has('focusId')?{focusId:url.searchParams.get('focusId')}:{})},{env,fetchImpl}));
         }
         if(url.pathname==='/api/catalog'&&req.method==='GET'){
           const {getPreparedCatalog}=await import('./android-catalog.mjs');
@@ -53,7 +55,7 @@ export function createServer({env=process.env,fetchImpl=fetch}={}){
         }
         if(url.pathname==='/api/destination-routes'&&req.method==='POST'){
           const {planDestinationRoutes}=await import('./destination-routes.mjs');
-          return json(res,200,await planDestinationRoutes(await readJson(req),{env,fetchImpl,selectionSigner}));
+          return json(res,200,await planDestinationRoutes(await readJson(req),{env,fetchImpl,selectionSigner,scenery,courses}));
         }
         if(url.pathname==='/api/scenic-photos'&&req.method==='POST'){
           const {findScenicPhotos}=await import('./scenic-photos.mjs');
