@@ -63,13 +63,19 @@ public final class CheckpointTest {
         check(first.automatic()&&first.checkpointId.equals("coast-1-2")&&first.imageKey.equals("coast"),"A coast checkpoint uses the coast sample");
         ScenicCaptureStore.Record mountain=store.saveAutomatic("r1","경로","목적지",RouteCheckpoint.of("mountain-3-4","mountain","산길 구간",35.3,129.2,35.3,129.25,6),2000);
         check(mountain.imageKey.equals("none"),"A kind without a sample photo shows no photo");
-        check(store.saveAutomatic("r1","경로","목적지",stretch(),3000)==first,"One clip per checkpoint per route");
-        check(store.saveAutomatic("r2","다른 경로","목적지",stretch(),4000)!=first,"The same stretch on another route is a new record");
+        String beforeRepeat=saved[0];
+        check(store.saveAutomatic("r1","경로","목적지",stretch(),3000)==null,"Repeating a checkpoint returns no new record for the demo counter");
+        check(saved[0].equals(beforeRepeat)&&store.recordsForRoute("r1").size()==2,"Repeating a checkpoint preserves stored records and their timestamps");
+        ScenicCaptureStore.Record anotherRoute=store.saveAutomatic("r2","다른 경로","목적지",stretch(),4000);
+        check(anotherRoute!=null&&anotherRoute!=first,"The same stretch on another route is a new record");
         List<String> ids=new ArrayList<>();ids.add("coast-1-2");ids.add("mountain-3-4");
         check(store.countForCheckpoints("r1",ids)==2&&store.latestForCheckpoints("r1",ids)==mountain,"Newest clip and count for a route's checkpoints");
         check(store.countForCheckpoints("r1",new ArrayList<String>())==0,"No checkpoints, no clips");
         ScenicCaptureStore reopened=new ScenicCaptureStore(new ScenicCaptureStore.Persistence(){public String read(){return saved[0];}public void write(String value){saved[0]=value;}});
         check(reopened.autoCaptureEnabled()&&reopened.countForCheckpoints("r1",ids)==2,"Setting and records survive a restart");
+        String beforeReopenedRepeat=saved[0];
+        check(reopened.saveAutomatic("r1","경로","목적지",stretch(),5000)==null,"A saved checkpoint is not counted as new after restarting the app");
+        check(saved[0].equals(beforeReopenedRepeat)&&reopened.countForCheckpoints("r1",ids)==2,"Repeating after restart keeps the original checkpoint records");
         // Records and the sharing flag from before checkpoints existed are still read.
         String legacy="SCENIC_CAPTURE_V1\n1\n"+b("id1")+"|"+b("r1")+"|"+b("경로")+"|"+b("목적지")+"|"+b("청사포")+"|"+b("coast")+"|5|1\n";
         ScenicCaptureStore old=new ScenicCaptureStore(new ScenicCaptureStore.Persistence(){public String read(){return legacy;}public void write(String value){}});

@@ -50,11 +50,12 @@ public final class ScenicCaptureStore {
     /**
      * A clip started by a checkpoint, not by a tap. It needs no screen interaction, so it may be saved
      * while driving, but only when the user has turned automatic recording on. One clip per checkpoint per route.
+     * Returns the newly saved record, or null when this route's checkpoint was already recorded.
      */
     public Record saveAutomatic(String routeId,String routeName,String destination,RouteCheckpoint checkpoint,long now) {
         if(!autoCapture)throw new IllegalStateException("Automatic recording is off");
         require(routeId);require(routeName);require(destination);if(checkpoint==null||now<0)throw new IllegalArgumentException("Invalid checkpoint capture");
-        for(Record r:records)if(r.automatic()&&r.routeId.equals(routeId)&&r.checkpointId.equals(checkpoint.id))return r;
+        for(Record r:records)if(r.automatic()&&r.routeId.equals(routeId)&&r.checkpointId.equals(checkpoint.id))return null;
         if(records.size()>=MAX_RECORDS)throw new IllegalStateException("Capture limit reached");
         String image="coast".equals(checkpoint.kind)?"coast":"none";
         Record saved=new Record(UUID.randomUUID().toString(),routeId,routeName,destination,checkpoint.name,image,now,sharingEnabled,checkpoint.id,checkpoint.kind);
