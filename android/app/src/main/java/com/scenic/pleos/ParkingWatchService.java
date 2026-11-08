@@ -183,10 +183,35 @@ public final class ParkingWatchService extends Service {
         try{helper.requestRoute(new RouteInfo(pending.lat,pending.lon,null,null,pending.name,"",pending.address,"",RouteOption.RECOMMENDED,"",false));update(pending.name+" 빈자리 확인 · 수락하신 대로 변경 안내를 요청 중");}
         catch(RuntimeException|LinkageError unavailable){stop("대체 주차장 안내를 요청하지 못했어요. 정차 후 주차 목록을 확인해 주세요.");}
     }
+    private android.view.View overlay;
+    /** Draws the suggestion over the native navigation screen when the user allowed "display over other apps". */
+    private void showOverlay(String text){
+        hideOverlay();
+        if(!android.provider.Settings.canDrawOverlays(this))return;
+        try{
+            android.view.WindowManager windows=getSystemService(android.view.WindowManager.class);float d=getResources().getDisplayMetrics().density;int pad=(int)(20*d);
+            android.widget.LinearLayout card=new android.widget.LinearLayout(this);card.setOrientation(android.widget.LinearLayout.VERTICAL);card.setPadding(pad,pad,pad,pad);
+            android.graphics.drawable.GradientDrawable background=new android.graphics.drawable.GradientDrawable();background.setColor(0xF0102A2A);background.setCornerRadius(16*d);card.setBackground(background);
+            android.widget.TextView title=new android.widget.TextView(this);title.setText("SCENIC · 주차장 변경 제안");title.setTextColor(0xFFB7D6CF);title.setTextSize(18);card.addView(title);
+            android.widget.TextView body=new android.widget.TextView(this);body.setText(text);body.setTextColor(0xFFFFFFFF);body.setTextSize(26);body.setPadding(0,(int)(8*d),0,(int)(14*d));card.addView(body);
+            android.widget.LinearLayout choices=new android.widget.LinearLayout(this);choices.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            android.widget.Button yes=new android.widget.Button(this),no=new android.widget.Button(this);yes.setText("변경");no.setText("유지");yes.setTextSize(24);no.setTextSize(24);
+            yes.setOnClickListener(v->acceptProposal());no.setOnClickListener(v->declineProposal());
+            android.widget.LinearLayout.LayoutParams half=new android.widget.LinearLayout.LayoutParams(0,android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,1);half.setMargins(0,0,(int)(8*d),0);choices.addView(yes,half);choices.addView(no,new android.widget.LinearLayout.LayoutParams(0,android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,1));card.addView(choices);
+            android.view.WindowManager.LayoutParams params=new android.view.WindowManager.LayoutParams((int)(640*d),android.view.WindowManager.LayoutParams.WRAP_CONTENT,android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,android.graphics.PixelFormat.TRANSLUCENT);
+            // Right side of the map keeps the native turn-by-turn card and the 2D button visible.
+            params.gravity=android.view.Gravity.TOP|android.view.Gravity.END;params.x=(int)(40*d);params.y=(int)(230*d);
+            windows.addView(card,params);overlay=card;
+        }catch(RuntimeException unavailable){overlay=null;Log.w("ScenicParkingWatch","overlay unavailable: "+unavailable);}
+    }
+    private void hideOverlay(){
+        android.view.View view=overlay;overlay=null;
+        if(view!=null)try{getSystemService(android.view.WindowManager.class).removeView(view);}catch(RuntimeException ignored){}
+    }
     private void showProposal(ParkingReroutePolicy.Proposal value){
         if(proposal!=null&&proposal.key().equals(value.key())){proposal=value;return;}
         proposal=value;String text=proposalMessage(value,target);
-        getSharedPreferences(PREFS,0).edit().putString("proposalText",text).apply();update(text);
+        getSharedPreferences(PREFS,0).edit().putString("proposalText",text).apply();update(text);showOverlay(text);
         PendingIntent open=PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         PendingIntent yes=PendingIntent.getService(this,2,new Intent(this,ParkingWatchService.class).setAction(ACCEPT),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         PendingIntent no=PendingIntent.getService(this,3,new Intent(this,ParkingWatchService.class).setAction(DECLINE),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
@@ -194,7 +219,7 @@ public final class ParkingWatchService extends Service {
             .addAction(new Notification.Action.Builder(null,"변경",yes).build()).addAction(new Notification.Action.Builder(null,"유지",no).build()).build());
     }
     private void clearProposal(){
-        proposal=null;getSharedPreferences(PREFS,0).edit().remove("proposalText").apply();
+        proposal=null;hideOverlay();getSharedPreferences(PREFS,0).edit().remove("proposalText").apply();
         try{getSystemService(NotificationManager.class).cancel(PROPOSAL_NOTIFICATION);}catch(RuntimeException ignored){}
     }
     private void acceptProposal(){
