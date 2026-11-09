@@ -243,6 +243,7 @@ public final class ScenicApiClientTest {
         FakeConnection inaccessible=respond(422,inaccessibleBody);
         try{client.destinationRoutes(35.1151,129.0414,destination,30,"coast");throw new AssertionError("Expected unavailable automobile route failure");}
         catch(ScenicApiClient.ApiException expected){
+            check(expected.statusCode==422,"HTTP status remains available for route-specific recovery without parsing an error body");
             check("선택한 장소까지의 자동차 경로를 확인하지 못했어요. 출발지 또는 다른 풍경·장소를 선택해 주세요.".equals(expected.getMessage()),"HTTP 422 explains an unavailable route and offers another origin or place");
             check(!expected.getMessage().contains("secret")&&!expected.getMessage().contains("https://"),"HTTP 422 never exposes provider secrets or raw response URLs");
             check(expected.getCause()==null,"HTTP 422 keeps no sensitive exception cause");
@@ -271,7 +272,13 @@ public final class ScenicApiClientTest {
         failsSafely(()->client.destinationRoutes(35.1151,129.0414,destination,30,"coast"),failedDestination);
         check(failedDestination.inputStreamReads==0&&failedDestination.input.available()==destinationBoundary.length&&failedDestination.input.closed,"Large unsuccessful destination response is never parsed or consumed");
         FakeConnection timeout = respond(200, "{}"); timeout.failure = new SocketTimeoutException("secret-url");
-        failsSafely(() -> client.getStatus(), timeout);
+        try{client.getStatus();throw new AssertionError("Expected network timeout");}
+        catch(ScenicApiClient.ApiException expected){
+            check(expected.statusCode==0,"A socket timeout does not masquerade as an HTTP route rejection");
+            check(expected.getCause()==null&&!expected.getMessage().contains("secret"),"Timeout status preserves sanitized errors");
+        }
+        check(timeout.disconnected,"Disconnect timed-out request");
+        check(new ScenicApiClient.ApiException("다시 시도해 주세요.").statusCode==0,"Local errors default to no HTTP status");
         FakeConnection writeFailure = respond(200, "{}"); writeFailure.outputFailure = new IOException("secret-write-error");
         failsSafely(() -> client.recommend(60, "lake"), writeFailure);
         StringBuilder deep = new StringBuilder("{\"value\":");

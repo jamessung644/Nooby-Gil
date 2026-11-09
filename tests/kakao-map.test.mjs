@@ -101,6 +101,20 @@ test('road geometry preserves latitude/longitude order and old route layers are 
   assert.match(h.element('map-detail').textContent, /도로.*없|명소/);
 });
 
+test('a destination preview clears the previous route and labels only selected locations', async () => {
+  const h = harness(); await h.flush(); h.finishSdk(); await h.flush();
+  h.window.scenicMap.setScene(scene({ roadCoordinates: [[37.51, 126.9959], [37.5293, 127.0699]] }));
+  h.window.scenicMap.setScene(scene({ courseId: 'destination-preview', title: '선택한 풍경', roadCoordinates: [], active: 1 }));
+  assert.equal(h.lines.length, 1, 'No extra line may be invented between the preview markers');
+  assert.equal(h.lines[0].map, null, 'The previous valid road must not remain behind a failed request');
+  assert.equal(h.markers.filter(marker => marker.map !== null).length, 2);
+  assert.match(h.element('map-detail').textContent, /출발지와 목적지/);
+  assert.equal(h.element('map-location').textContent, '현재 위치 미수신 · 선택한 장소 위치 표시');
+  const fitCount = h.maps[0].bounds.length;
+  h.resize();
+  assert.equal(h.maps[0].bounds.length, fitCount + 1, 'Both preview endpoints stay visible after the card resizes');
+});
+
 test('Android location creates a fixed dot and metre accuracy circle and clears when absent', async () => {
   const h = harness(); await h.flush(); h.finishSdk(); await h.flush();
   h.window.scenicMap.setScene(scene({ location: { lat: 37.6, lon: 127.2, accuracy: 24 }, focus: 'location', focusRevision: 1 }));

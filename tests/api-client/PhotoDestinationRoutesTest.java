@@ -25,6 +25,13 @@ public final class PhotoDestinationRoutesTest {
             .put("scenicLabels",new JSONArray().put("해안 3km")).put("waypoints",new JSONArray().put(new JSONObject().put("id","tour-777").put("name","달맞이길").put("lat",35.15).put("lon",129.15).put("source","한국관광공사 TourAPI")));
         o.getJSONArray("routes").put(scenic);o.put("scenicStatus","ok");return o;
     }
+    private static JSONObject withOrderedStops(String id,String coordinates)throws Exception{
+        JSONObject o=withScenic(40,coordinates);
+        o.getJSONArray("routes").getJSONObject(1).put("id",id).put("waypoints",new JSONArray()
+            .put(new JSONObject().put("id","first").put("name","첫 해안").put("lat",35.15).put("lon",129.09).put("source","한국관광공사 TourAPI"))
+            .put(new JSONObject().put("id","second").put("name","둘째 해안").put("lat",35.12).put("lon",129.15).put("source","한국관광공사 TourAPI")));
+        return o;
+    }
     private static void rejectExtras(JSONObject o)throws Exception{try{DestinationRoutePlan.parsePhotoDestination(o,region(),photo(),35.1151,129.0414,"coast",30);throw new AssertionError("Accepted a scenic road that misses the photo place or the time budget");}catch(JSONException expected){checks++;}}
     private static void reject(Change change)throws Exception{JSONObject o=response();change.apply(o);try{parse(o);throw new AssertionError("Accepted substituted/unreachable photo");}catch(JSONException expected){checks++;}}
     public static void main(String[] args)throws Exception{
@@ -46,6 +53,15 @@ public final class PhotoDestinationRoutesTest {
         if(extras.routes.size()!=2||extras.scenic==null||!extras.destination.id.equals(photo().id)||extras.scenic.waypoints.size()!=1)throw new AssertionError("Scenic road to the photo place");checks++;
         rejectExtras(withScenic(80,"[[35.1151,129.0414],[35.1500,129.1500],[35.1595,129.1926]]"));
         rejectExtras(withScenic(40,"[[35.1151,129.0414],[35.1500,129.1500],[35.1587,129.1604]]"));
+        for(String id:new String[]{"curated","scenic"}){
+            rejectExtras(withOrderedStops(id,"[[35.1151,129.0414],[35.12,129.15],[35.15,129.09],[35.1595,129.1926]]"));
+            for(String geometry:new String[]{
+                "[[35.1151,129.0414],[35.15,129.09],[35.12,129.15],[35.1595,129.1926]]",
+                "[[35.1151,129.0414],[35.12,129.15],[35.15,129.09],[35.12,129.15],[35.1595,129.1926]]"}){
+                DestinationRoutePlan ordered=DestinationRoutePlan.parsePhotoDestination(withOrderedStops(id,geometry),region(),photo(),35.1151,129.0414,"coast",30);
+                if(ordered.routes.get(1).waypoints.size()!=2)throw new AssertionError("Ordered stops survive an earlier pass of the second place");checks++;
+            }
+        }
         try{DestinationRoutePlan.parsePhotoDestination(withScenic(40,"[[35.1151,129.0414],[35.1500,129.1500],[35.1595,129.1926]]"),region(),photo(),35.1151,129.0414,"coast");throw new AssertionError("Extra roads need extra minutes");}catch(JSONException expected){checks++;}
         System.out.println("PhotoDestinationRoutesTest: "+checks+" checks passed");
     }

@@ -67,7 +67,7 @@
     if (!points.length) return;
     const bounds = new sdk.LatLngBounds();
     for (const [lat, lon] of points) bounds.extend(new sdk.LatLng(lat, lon));
-    map.setBounds(bounds, 48, 48, 48, 48);
+    map.setBounds(bounds, scene.courseId === 'destination-preview' ? 96 : 48, 48, 48, 48);
   }
 
   function renderScene() {
@@ -105,7 +105,8 @@
       dot.setAttribute('aria-label', 'Android에서 받은 현재 위치');
       layers.push(new sdk.CustomOverlay({ map, position, content: dot, xAnchor: 0.5, yAnchor: 0.5, zIndex: 40 }));
       ui.location.textContent = point.accuracy === null ? '현재 위치 · 정확도 미수신' : `현재 위치 · 정확도 약 ${Math.round(point.accuracy)}m`;
-    } else ui.location.textContent = '현재 위치 미수신 · 선택한 경로 표시';
+    } else ui.location.textContent = scene.roadCoordinates.length
+      ? '현재 위치 미수신 · 선택한 경로 표시' : '현재 위치 미수신 · 선택한 장소 위치 표시';
     // Optional native revision preserves the user's pan during ordinary GPS updates.
     if (!renderedScene || scene.focusRevision === undefined || renderedScene.courseId !== scene.courseId
       || renderedScene.focus !== scene.focus || renderedScene.focusRevision !== scene.focusRevision) viewport(scene);
@@ -217,7 +218,13 @@
       messageTitle: 'map-message-title', messageDetail: 'map-message-detail', location: 'map-location', retry: 'map-retry' })
       .map(([key, id]) => [key, document.getElementById(id)]));
     ui.retry.addEventListener('click', connect);
-    const relayout = () => { if (ready && map) map.relayout(); };
+    const relayout = () => {
+      if (!ready || !map) return;
+      map.relayout();
+      // Preview cards can resize after the native loading/error panel and font
+      // settle. Keep both endpoints visible; live route panning stays unchanged.
+      if (latestScene?.courseId === 'destination-preview' && !latestScene.roadCoordinates.length) viewport(latestScene);
+    };
     if (typeof ResizeObserver === 'function') new ResizeObserver(relayout).observe(ui.canvas);
     else window.addEventListener('resize', relayout);
     connect();

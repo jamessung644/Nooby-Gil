@@ -12,10 +12,13 @@ const SOURCE_URL = 'https://www.data.go.kr/data/15099883/openapi.do';
 export const KOTSA_SOURCE = '한국교통안전공단 · 공영주차장 (제공처 갱신 시각 미제공)';
 export const KOTSA_MATCH_METERS = 150;
 const CACHE_MS = 30000, MAX_PAGES = 10;
+const REQUEST_TIMEOUT_MS = 8000;
 const defaultFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'catalog', 'parking-facilities.json');
 const generic = /주차장|공영|공용|노외|노상|민영|시영|구영|군영|\(.*?\)|\s+|[-_·.]/g;
 const nameKey = value => String(value || '').normalize('NFKC').replace(generic, '').toLowerCase();
 const similar = (a, b) => { const x = nameKey(a), y = nameKey(b); return x.length >= 2 && y.length >= 2 && (x === y || x.includes(y) || y.includes(x)); };
+const count = value => (typeof value === 'number' || typeof value === 'string' && /^\d+$/.test(value))
+  && Number.isSafeInteger(Number(value)) && Number(value) >= 0 && Number(value) <= 100000 ? Number(value) : null;
 function meters(a, b) {
   const r = Math.PI / 180, h = Math.sin((b.lat - a.lat) * r / 2) ** 2
     + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin((b.lon - a.lon) * r / 2) ** 2;
@@ -27,25 +30,38 @@ export function loadFacilities(file = defaultFile) {
     return lots && typeof lots === 'object' ? lots : {};
   } catch { return {}; }
 }
-const caches = new Map();
-async function realtime(key, fetchImpl, now) {
-  const cached = caches.get(key);
-  if (cached?.rows && now - cached.at < CACHE_MS) return cached;
+const caches = new WeakMap();
+async function realtime(key, fetchImpl, clock) {
+  if (!caches.has(fetchImpl)) caches.set(fetchImpl, new Map());
+  const cache = caches.get(fetchImpl), cached = cache.get(key), time = clock();
+  if (cached?.rows && time >= cached.at && time - cached.at < CACHE_MS) return cached;
   if (cached?.pending) return cached.pending;
   const entry = cached || { at: 0, rows: null, pending: null };
   entry.pending = (async () => {
-    const rows = [];
-    for (let page = 1; page <= MAX_PAGES; page++) {
-      const response = await fetchImpl(`${BASE}?serviceKey=${encodeURIComponent(key)}&pageNo=${page}&numOfRows=1000&format=2`, { redirect: 'error' });
-      if (!response.ok) throw new Error('kotsa http');
-      const data = await response.json();
-      if (data?.resultCode !== '0' || !Array.isArray(data.PrkRealtimeInfo)) throw new Error('kotsa response');
-      rows.push(...data.PrkRealtimeInfo);
-      if (page * 1000 >= Number(data.totalCount)) break;
-    }
-    entry.rows = rows; entry.at = now; return entry;
-  })().finally(() => { entry.pending = null; });
-  caches.set(key, entry);
+    const controller = new AbortController(); let timer;
+    try {
+      // One deadline covers every page and body read, even if the transport ignores abort.
+      return await Promise.race([
+        (async () => {
+          const rows = [];
+          for (let page = 1; page <= MAX_PAGES; page++) {
+            const response = await fetchImpl(`${BASE}?serviceKey=${encodeURIComponent(key)}&pageNo=${page}&numOfRows=1000&format=2`, { redirect: 'error', signal: controller.signal });
+            if (controller.signal.aborted) throw new Error('kotsa request cancelled');
+            if (!response.ok) throw new Error('kotsa http');
+            const data = await response.json();
+            if (controller.signal.aborted) throw new Error('kotsa request cancelled');
+            if (data?.resultCode !== '0' || !Array.isArray(data.PrkRealtimeInfo)) throw new Error('kotsa response');
+            rows.push(...data.PrkRealtimeInfo);
+            if (page * 1000 >= Number(data.totalCount)) break;
+          }
+          entry.rows = rows; entry.at = clock(); return entry;
+        })(),
+        new Promise((_resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('kotsa request timeout')); }, REQUEST_TIMEOUT_MS); }),
+      ]);
+    } catch (error) { entry.rows = null; throw error; }
+    finally { clearTimeout(timer); controller.abort(); entry.pending = null; }
+  })();
+  cache.set(key, entry);
   return entry.pending;
 }
 
@@ -55,12 +71,12 @@ export function matchKotsaParking(places, rows, facilities, { now, retrievedAt }
   places.forEach((place, index) => {
     if (!Number.isFinite(place.lat) || !Number.isFinite(place.lon)) return;
     for (const row of rows) {
-      const info = facilities[row.prk_center_id];
+      const info = facilities[row?.prk_center_id];
       if (!info || !Number.isFinite(info.lat) || !Number.isFinite(info.lon) || !similar(place.name, info.name)) continue;
       const distance = meters(place, info);
       if (distance > KOTSA_MATCH_METERS) continue;
-      const free = Number(row.pkfc_Available_ParkingLots_total), total = Number(row.pkfc_ParkingLots_total);
-      if (!Number.isInteger(free) || !Number.isInteger(total) || total <= 0 || total > 100000 || free < 0 || free > total) continue;
+      const free = count(row.pkfc_Available_ParkingLots_total), total = count(row.pkfc_ParkingLots_total);
+      if (free === null || total === null || total <= 0 || free > total) continue;
       candidates.push({ index, id: String(row.prk_center_id), free, total, distance });
     }
   });
@@ -81,9 +97,8 @@ export async function enrichKotsaParkingPlaces(places, { env = process.env, fetc
   const key = typeof env?.DATA_GO_KR_KEY === 'string' ? env.DATA_GO_KR_KEY.trim() : '';
   if (!key || !Object.keys(facilities).length || !places.length) return places;
   try {
-    const stamp = now();
-    const { at, rows } = await realtime(key, fetchImpl, stamp);
-    const matches = matchKotsaParking(places, rows, facilities, { now: stamp, retrievedAt: at });
+    const { at, rows } = await realtime(key, fetchImpl, now);
+    const matches = matchKotsaParking(places, rows, facilities, { now: now(), retrievedAt: at });
     return places.map((place, index) => matches.has(index) ? { ...place, parkingStatus: matches.get(index).status, parking: matches.get(index) } : place);
   } catch { return places; }
 }

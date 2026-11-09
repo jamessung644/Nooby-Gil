@@ -99,6 +99,26 @@ test('public inventory cache coalesces calls, renews assessment time and ages or
   assert.equal(requests, 3); assert.equal(aged[0].parking.reason, 'stale'); assert.equal(aged[0].parking.availableSpaces, null);
 });
 
+test('a stalled KOTSA fallback cannot suppress a successful municipal inventory', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const seoul = mockInventory([row({ NOW_PRK_VHCL_CNT: '25' })]);
+  let result, kotsaCalls = 0;
+  const pending = enrichParkingPlaces([place()], { env: { DATA_GO_KR_KEY: 'test-stalled-fallback' }, now: () => time,
+    fetchImpl: async (url, options) => {
+      if (new URL(url).hostname === 'apis.data.go.kr') { kotsaCalls++; return new Promise(() => {}); }
+      return seoul(url, options);
+    } }).then(value => { result = value; });
+  await new Promise(setImmediate);
+  assert.equal(kotsaCalls, 1);
+  t.mock.timers.tick(8000);
+  await new Promise(setImmediate);
+  assert.ok(result, 'nearby results must finish when the KOTSA deadline expires');
+  await pending;
+  assert.equal(result[0].parkingStatus, 'available');
+  assert.equal(result[0].parking.availableSpaces, 42);
+  assert.equal(result[0].parking.providerId, 'seoul:172971');
+});
+
 test('provider failure never reuses an earlier available count, and a later recovery works', async () => {
   let current = time, broken = false;
   const provider = mockInventory([row({ NOW_PRK_VHCL_CNT: '1' })]);
