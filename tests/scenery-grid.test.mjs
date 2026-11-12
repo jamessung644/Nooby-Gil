@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeRoute, describeEvidence, findCheckpoints, loadSceneryGrid, GRID_BITS } from '../server/scenery-grid.mjs';
+import { analyzeRoute, describeEvidence, findCheckpoints, findNatureBlocks, NATURE_KINDS, loadSceneryGrid, GRID_BITS } from '../server/scenery-grid.mjs';
 import { planDestinationRoutes, sceneryBonus } from '../server/destination-routes.mjs';
 
 const CELL = 250;
@@ -101,16 +101,17 @@ const fetchImpl = async url => {
 };
 const coastEverywhere = () => makeGrid(set => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) set(x, y, GRID_BITS.coast); });
 
-test('the chosen scenic road carries measured evidence without changing which road is chosen', async () => {
+test('the chosen scenic road carries measured evidence, and a coast stretch on the grid can be its stop', async () => {
   const withGrid = await planDestinationRoutes(sceneTrip, { fetchImpl, env, catalog: { places }, scenery: coastEverywhere() });
   const without = await planDestinationRoutes(sceneTrip, { fetchImpl, env, catalog: { places }, scenery: null });
   assert.equal(withGrid.scenicStatus, 'ok');
   const scenic = withGrid.routes[1], plain = without.routes[1];
-  assert.deepEqual(scenic.waypoints, plain.waypoints);
-  assert.deepEqual(scenic.coordinates, plain.coordinates);
+  // Without a grid only the tourist place can be the stop; with one, a coast stretch beside it may win.
+  assert.equal(plain.waypoints[0].id, 'a-first');
+  assert.ok(scenic.waypoints.every(w => w.source === '한국관광공사 TourAPI'));
   assert.ok(scenic.scenicLabels.some(label => /^해안 \d+km$/.test(label)), JSON.stringify(scenic.scenicLabels));
   assert.ok(scenic.reason.includes('지도 분석') && scenic.reason.length <= 200, scenic.reason);
-  assert.equal(scenic.headline, '해안 풍경 하나 경유');
+  assert.ok(/해안/.test(scenic.headline) && scenic.headline.endsWith(' 경유'), scenic.headline);
   assert.ok(scenic.scenicLabels.length <= 8 && new Set(scenic.scenicLabels).size === scenic.scenicLabels.length);
   assert.equal(scenic.evidence.source, 'OpenStreetMap contributors');
   assert.ok(scenic.evidence.scenic.coastKm >= 10 && scenic.evidence.fast.coastKm >= 10);
@@ -150,25 +151,39 @@ test('checkpoints are the longest stretches in driving order, with ids stable fo
   assert.deepEqual(findCheckpoints(road, makeGrid(() => {})), []);
 });
 
+test('nature blocks are dense scenic squares beside the road, not a stray cell, and need a grid', () => {
+  const grid = makeGrid(set => {
+    for (let x = x0 + 8; x < x0 + 12; x++) for (let y = roadRow + 3; y < roadRow + 7; y++) set(x, y, GRID_BITS.coast);
+    set(x0 + 30, roadRow + 1, GRID_BITS.coast);
+    for (let x = x0 + 40; x < x0 + 44; x++) for (let y = roadRow - 20; y < roadRow - 16; y++) set(x, y, GRID_BITS.water);
+  });
+  const blocks = findNatureBlocks(road, grid);
+  assert.ok(blocks.some(b => b.kind === 'coast' && /^osm-coast-\d+-\d+$/.test(b.id)), JSON.stringify(blocks));
+  assert.ok(blocks.every(b => b.strength >= NATURE_KINDS[b.kind].min), 'a single cell is not a stretch');
+  assert.equal(blocks.filter(b => b.kind === 'coast').length, 1);
+  assert.deepEqual(findNatureBlocks(road, grid, { kinds: ['water'], corridorMeters: 1000 }), []);
+  assert.deepEqual(findNatureBlocks(road, grid, { kinds: ['forest'] }), []);
+  assert.deepEqual(findNatureBlocks(road, null), []);
+});
 test('the planner attaches checkpoints to the scenic road when a grid is present and omits them otherwise', async () => {
   const withGrid = await planDestinationRoutes(sceneTrip, { fetchImpl, env, catalog: { places }, scenery: coastEverywhere() });
   const scenic = withGrid.routes[1];
   assert.ok(Array.isArray(scenic.checkpoints) && scenic.checkpoints.length >= 2 && scenic.checkpoints.length <= 6);
-  assert.ok(scenic.checkpoints.some(c => c.kind === 'place' && c.name === '해안 풍경 하나'));
+  assert.ok(scenic.checkpoints.some(c => c.kind === 'place' && c.name.includes('해안')));
   assert.equal(new Set(scenic.checkpoints.map(c => c.id)).size, scenic.checkpoints.length);
   assert.equal('checkpoints' in withGrid.routes[0], false);
   const without = await planDestinationRoutes(sceneTrip, { fetchImpl, env, catalog: { places }, scenery: null });
   assert.equal('checkpoints' in without.routes[1], false);
 });
 
-test('with a coast theme the planner prefers the place whose road runs along more coast', async () => {
+test('with a coast theme the planner prefers the stop whose road runs along more coast', async () => {
   const two = [{ id: 'a-inland', title: '내륙 풍경', lat: 35.11, lon: 129.05 }, { id: 'b-coastal', title: '해안 풍경', lat: 35.11, lon: 129.15 }];
   const [, row] = cellOf(35.1, 129.0);
   const [xa] = cellOf(35.1, 129.0);
   const grid = makeGrid(set => { for (let x = xa + 60; x < xa + 200 && x < W; x++) for (let y = row - 3; y <= row + 3; y++) set(x, y, GRID_BITS.coast); for (let x = xa + 51; x <= xa + 57; x++) for (let y = row + 3; y <= row + 6; y++) set(x, y, GRID_BITS.coast); });
   const result = await planDestinationRoutes(sceneTrip, { fetchImpl, env, catalog: { places: two }, scenery: grid });
   assert.equal(result.scenicStatus, 'ok');
-  assert.ok(result.routes[1].waypoints.some(w => Math.abs(w.lon - 129.15) < 0.01), JSON.stringify(result.routes[1].waypoints));
+  assert.ok(result.routes[1].waypoints.some(w => w.lon > 129.1), JSON.stringify(result.routes[1].waypoints));
 });
 
 test('without a grid the scenic road keeps the earlier labels and reason and has no evidence field', async () => {

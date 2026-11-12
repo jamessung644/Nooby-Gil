@@ -42,7 +42,8 @@ function cellFlags(grid, p, spread) {
 export function flagsAround(place, grid = loadSceneryGrid(), spread = 2) {
   if (!grid || !place || !Number.isFinite(place.lat) || !Number.isFinite(place.lon)) return 0;
   return cellFlags(grid, place, spread);
-}// [start, end) sample index pairs of runs (one-sample gaps bridged) of at least minKm.
+}
+// [start, end) sample index pairs of runs (one-sample gaps bridged) of at least minKm.
 function runRanges(samples, minKm) {
   const flags = samples.slice();
   for (let i = 1; i < flags.length - 1; i++) if (!flags[i] && flags[i - 1] && flags[i + 1]) flags[i] = true;
@@ -91,6 +92,52 @@ export function analyzeRoute(coordinates, grid = loadSceneryGrid()) {
     tunnelKm: Math.round(under.filter(flags => flags & GRID_BITS.tunnel).length * STEP_METERS / 1000),
     viewpoints: near.filter(flags => flags & GRID_BITS.viewpoint).length,
   };
+}
+
+// Natural scenes a drive can pass through. Forest is left out: it is nearly everywhere in Korea
+// and does not tell one road from another. `min` is how many of a block's 16 cells (about 1 km)
+// must carry the scene before the block counts as a stretch worth a stop.
+export const NATURE_KINDS = {
+  coast: { bit: GRID_BITS.coast, min: 5, label: '해안 경관 구간' },
+  water: { bit: GRID_BITS.water, min: 6, label: '강·호수 경관 구간' },
+  mountain: { bit: GRID_BITS.mountain, min: 8, label: '산악 경관 구간' },
+};
+const BLOCK_CELLS = 4;
+/**
+ * Blocks of natural scenery within `corridorMeters` of a road (a [lat, lon] polyline). Each block is a
+ * 4 x 4 cell square (about 1 km); the stop is the centroid of the block's scenic cells.
+ * Returns [] without a grid. `kinds` picks from NATURE_KINDS.
+ */
+export function findNatureBlocks(coordinates, grid = loadSceneryGrid(), { kinds = Object.keys(NATURE_KINDS), corridorMeters = 4000 } = {}) {
+  if (!grid || !Array.isArray(coordinates) || coordinates.length < 2) return [];
+  const wanted = kinds.filter(kind => kind in NATURE_KINDS);
+  if (!wanted.length) return [];
+  const blocksW = Math.ceil(grid.W / BLOCK_CELLS), blocksH = Math.ceil(grid.H / BLOCK_CELLS);
+  const blockMeters = BLOCK_CELLS * (grid.CELL || 250), reach = Math.ceil(corridorMeters / blockMeters) + 1;
+  // Every second sample (about 1 km) is enough: the reach already covers the gap between samples.
+  const near = new Set();
+  sampleRoad(coordinates).forEach((p, index) => {
+    if (index % 2) return;
+    const bx = Math.floor((p.lon - grid.LON0) / grid.dLon / BLOCK_CELLS), by = Math.floor((p.lat - grid.LAT0) / grid.dLat / BLOCK_CELLS);
+    for (let dy = -reach; dy <= reach; dy++) for (let dx = -reach; dx <= reach; dx++) {
+      const x = bx + dx, y = by + dy;
+      if (x >= 0 && x < blocksW && y >= 0 && y < blocksH) near.add(y * blocksW + x);
+    }
+  });
+  const found = [];
+  for (const key of near) {
+    const bx = key % blocksW, by = Math.floor(key / blocksW);
+    for (const kind of wanted) {
+      const { bit, min } = NATURE_KINDS[kind];
+      let count = 0, sumX = 0, sumY = 0;
+      for (let dy = 0; dy < BLOCK_CELLS; dy++) for (let dx = 0; dx < BLOCK_CELLS; dx++) {
+        const x = bx * BLOCK_CELLS + dx, y = by * BLOCK_CELLS + dy;
+        if (x < grid.W && y < grid.H && grid.cells[y * grid.W + x] & bit) { count++; sumX += x + 0.5; sumY += y + 0.5; }
+      }
+      if (count >= min) found.push({ kind, id: `osm-${kind}-${bx}-${by}`, lat: grid.LAT0 + sumY / count * grid.dLat, lon: grid.LON0 + sumX / count * grid.dLon, strength: count });
+    }
+  }
+  return found;
 }
 
 const CHECKPOINT_KINDS = [

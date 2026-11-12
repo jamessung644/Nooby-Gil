@@ -387,8 +387,9 @@ for (const { theme, label, title } of scenicFixtures) {
   });
 }
 
-test('all admits each of the six scenic categories, and stops at the same place never become two waypoints', async () => {
-  for (const { title } of scenicFixtures) assert.equal(sceneCandidates('all', [title]).length, 1, title);
+test('all admits the natural and rural categories but not city views, and stops at the same place never become two waypoints', async () => {
+  for (const { title } of scenicFixtures) assert.equal(sceneCandidates('all', [title]).length, sceneCandidates('city', [title]).length ? 0 : 1, title);
+  assert.ok(scenicFixtures.some(({ title }) => sceneCandidates('city', [title]).length === 1));
   const candidates = sceneCandidates('all', scenicFixtures.map(fixture => fixture.title));
   assert.equal(candidates.length, 3);
   const result = await planDestinationRoutes({ ...sceneTrip, theme: 'all' }, {
@@ -557,7 +558,7 @@ test('nearby scenes are never paired into two stops', async () => {
 
 test('a place with several scenery tags outranks a single-tag place at the same position for all', () => {
   const [first] = selectScenicCandidates({ ...sceneTrip, theme: 'all', fast: { distanceKm: 20, coordinates: sceneBaseline } }, {
-    places: [scenePoint('해안 풍경', 'a-plain'), scenePoint('반포한강공원', 'z-rich')],
+    places: [scenePoint('해안 풍경', 'a-plain'), scenePoint('해안 숲길', 'z-rich')],
   });
   assert.equal(first.id, 'z-rich');
 });

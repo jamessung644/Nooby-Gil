@@ -1,7 +1,7 @@
 import { ApiError, buildKakaoUrl, normalizeKakao } from './providers.mjs';
 import { getPreparedCatalog } from './android-catalog.mjs';
 import { scenicSelectionSigner } from './scenic-photos.mjs';
-import { GRID_BITS, analyzeRoute, describeEvidence, findCheckpoints, flagsAround } from './scenery-grid.mjs';
+import { GRID_BITS, analyzeRoute, describeEvidence, findCheckpoints, findNatureBlocks, flagsAround, NATURE_KINDS } from './scenery-grid.mjs';
 import { loadDriveCourses } from './drive-courses.mjs';
 
 const SOURCE = 'Kakao Mobility';
@@ -194,7 +194,9 @@ export function selectScenicCandidates({ origin, destination, theme, fast, extra
   const seen = new Set(), candidates = [];
   for (const place of catalog.places) {
     if (!object(place) || !safeId(place.id) || seen.has(place.id) || !domesticCoordinate(place) || !text(place.title, 200)) continue;
-    const { themes, confirmed } = confirmScenes(place, scenery(place.title), grid);
+    const found = confirmScenes(place, scenery(place.title), grid), confirmed = found.confirmed;
+    // 'All' means natural scenery; a city view is offered only when asked for.
+    const themes = theme === 'all' ? found.themes.filter(value => value !== 'city') : found.themes;
     if (!themes.length || (theme !== 'all' && !themes.includes(theme))) continue;
     // For places with several scenes, keep the requested theme first in labels.
     const selectedTheme = theme === 'all' ? themes[0] : theme;
@@ -213,9 +215,53 @@ export function selectScenicCandidates({ origin, destination, theme, fast, extra
       baselineDistance: near.distance, progress: near.progress, value,
       score: near.distance + (fromStart + toEnd - direct) * 0.5 - value * 300 * reach });
   }
+  if (grid) candidates.push(...natureCandidates({ origin, destination, direct, target, denominator, reach, corridor, theme, fast, grid, catalog }));
   return candidates.sort((a, b) => a.score - b.score || a.id.localeCompare(b.id)).slice(0, limit);
 }
 
+// Stretches of natural scenery (coast, river/lake, mountain) found on the offline OSM grid beside the
+// fast road. They are offered as stops in their own right, so a scenic road can pass through nature
+// even where no tourist place carries the scene. The stop is a point inside the stretch; whether the
+// computed road really passes it is checked afterwards like for any other stop.
+const NATURE_THEME_KINDS = { all: ['coast', 'water', 'mountain'], coast: ['coast'], water: ['water'], mountain: ['mountain'], forest: ['mountain'] };
+function natureCandidates({ origin, destination, direct, target, denominator, reach, corridor, theme, fast, grid, catalog }) {
+  const kinds = NATURE_THEME_KINDS[theme];
+  if (!kinds) return [];
+  const found = [];
+  for (const block of findNatureBlocks(fast.coordinates, grid, { kinds, corridorMeters: corridor })) {
+    if (!domesticCoordinate(block)) continue;
+    const fromStart = distanceMeters(origin, block), toEnd = distanceMeters(block, destination);
+    if (fromStart < 500 || toEnd < 500 || fromStart + toEnd - direct > Math.min(10000 * reach, Math.max(1500, direct * 0.4))) continue;
+    const xy = project(block, origin), forward = (xy.x * target.x + xy.y * target.y) / denominator;
+    if (forward < 0.1 || forward > 0.9) continue;
+    const near = nearPolyline(block, fast.coordinates, origin);
+    if (near.distance > corridor || near.distance < 150 || near.progress < 0.08 || near.progress > 0.92) continue;
+    // Requested scene: 3.5-4; under 'all' one point lower, like a place. A broader stretch counts a bit more.
+    const value = (theme === 'all' ? 3 : 3.5) + Math.min(0.5, (block.strength - NATURE_KINDS[block.kind].min) * 0.1);
+    found.push({ id: block.id, name: NATURE_KINDS[block.kind].label, lat: block.lat, lon: block.lon, theme: block.kind,
+      themes: [block.kind], source: PLACE_SOURCE, baselineDistance: near.distance, progress: near.progress, value,
+      score: near.distance + (fromStart + toEnd - direct) * 0.5 - value * 300 * reach });
+  }
+  // Neighbouring blocks are one stretch: keep the best of every 4 km, at most 3 per scene.
+  const kept = [];
+  for (const item of found.sort((a, b) => a.score - b.score)) {
+    if (kept.filter(other => other.theme === item.theme).length >= 3) continue;
+    if (kept.some(other => distanceMeters(other, item) < 4000)) continue;
+    kept.push(item);
+  }
+  // Name the stretch after the nearest scenic tourist place (never a plant or a facility) so the driver recognises it.
+  for (const item of kept) {
+    let nearest = null, nearestDistance = 5000;
+    for (const place of catalog.places) {
+      if (!object(place) || !Number.isFinite(place.lat) || !Number.isFinite(place.lon) || !text(place.title, 200)
+        || !scenery(place.title).some(value => value !== 'city')) continue;
+      const d = distanceMeters(item, place);
+      if (d < nearestDistance) { nearest = place; nearestDistance = d; }
+    }
+    if (nearest) item.name = `${item.name} (${nearest.title.slice(0, 30)} 인근)`.slice(0, 100);
+  }
+  return kept;
+}
 // Road-side scenery gained over the fast road, in the same units as a stop's scenery value (3-4).
 // In the test against curated drive courses the coastal share separated them from ordinary roads in
 // 88% of pairs, tunnels (fewer) and viewpoints (more) moderately; other terrains were not separated,
