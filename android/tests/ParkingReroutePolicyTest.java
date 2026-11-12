@@ -44,6 +44,31 @@ public final class ParkingReroutePolicyTest {
         check(ParkingReroutePolicy.evaluateForAutomaticReroute(response(full,free),target,Collections.emptySet(),NOW).alternative.id.equals("2"),"Timestamped automatic reroute remains supported");
         for(JSONObject snapshot:new JSONObject[]{fullSnapshot,freeSnapshot})snapshot.getJSONObject("parking").put("fetchedAt",Instant.ofEpochMilli(NOW+90001).toString());
         check(ParkingReroutePolicy.evaluate(response(fullSnapshot,freeSnapshot),target,Collections.emptySet(),NOW+90001).alternative==null,"Expired cached snapshot cannot change even a user-requested route");
+        // Proposals: the driver decides, so "almost full" and official snapshots also count.
+        java.util.Set<String> none=Collections.emptySet();
+        ParkingReroutePolicy.Proposal fullProposal=ParkingReroutePolicy.propose(response(full,free),target,none,NOW,null);
+        check(ParkingReroutePolicy.Proposal.FULL.equals(fullProposal.level)&&fullProposal.alternative.id.equals("2")&&fullProposal.key().equals("2|FULL"),"Full lot proposes a roomier one");
+        ParkingReroutePolicy.Proposal low=ParkingReroutePolicy.propose(response(row("1","available",3),free),target,none,NOW,null);
+        check(ParkingReroutePolicy.Proposal.LOW.equals(low.level)&&low.alternative.id.equals("2"),"Almost-full lot (3 of 100) proposes a switch");
+        check(ParkingReroutePolicy.propose(response(row("1","available",5),free),target,none,NOW,null).level!=null,"5 free spaces is still almost full");
+        check(ParkingReroutePolicy.propose(response(row("1","available",6),free),target,none,NOW,null).level==null,"6 of 100 is comfortable");
+        JSONObject bigLot=row("1","available",30);bigLot.getJSONObject("parking").put("totalSpaces",1000);
+        check(ParkingReroutePolicy.propose(response(bigLot,free),target,none,NOW,null).level!=null,"30 of 1000 is under 5 percent");
+        check(ParkingReroutePolicy.propose(response(row("1","available",3),row("2","available",3)),target,none,NOW,null).alternative==null,"An alternative that is also nearly full is not suggested");
+        check(ParkingReroutePolicy.propose(response(row("1","available",3),row("2","available",20)),target,none,NOW,null).alternative.id.equals("2"),"A roomier alternative is suggested");
+        check(ParkingReroutePolicy.propose(response(row("1","unknown",0),free),target,none,NOW,null).level==null,"Unknown current lot never triggers a proposal");
+        check(ParkingReroutePolicy.propose(response(full,unknown),target,none,NOW,null).alternative==null,"Unknown alternative is never offered");
+        check(ParkingReroutePolicy.propose(response(full,free),target,new HashSet<>(Collections.singletonList("2")),NOW,null).alternative==null,"Excluded lot is not offered again");
+        JSONObject other=row("4","available",30);
+        check(ParkingReroutePolicy.propose(response(full,free,other),target,none,NOW,"4").alternative.id.equals("4"),"An accepted lot is kept while it is still valid");
+        check(ParkingReroutePolicy.propose(response(full,free),target,none,NOW,"4").alternative.id.equals("2"),"An accepted lot that disappeared falls back to the best lot");
+        JSONObject stalePair=row("1","available",3);stalePair.getJSONObject("parking").put("observedAt","2026-11-06T08:45:00Z");
+        check(ParkingReroutePolicy.propose(response(stalePair,free),target,none,NOW,null).level==null,"Stale low reading cannot trigger a proposal");
+        JSONObject snapFull=row("1","full",0),snapFree=row("2","available",12);for(JSONObject s:new JSONObject[]{snapFull,snapFree})s.getJSONObject("parking").put("timeBasis","retrieved").put("observedAt",JSONObject.NULL).put("retrievedAt","2026-11-06T09:00:00Z");
+        check(ParkingReroutePolicy.propose(response(snapFull,snapFree),target,none,NOW,null).alternative.id.equals("2"),"Fresh official snapshots can back a proposal");
+        for(JSONObject s:new JSONObject[]{snapFull,snapFree})s.getJSONObject("parking").put("fetchedAt",Instant.ofEpochMilli(NOW+90001).toString());
+        check(ParkingReroutePolicy.propose(response(snapFull,snapFree),target,none,NOW+90001,null).level==null,"Expired snapshot cannot back a proposal");
+        reject(()->ParkingReroutePolicy.propose(response(row("9","full",0),free),target,none,NOW,null),"Proposal rejects a different focused lot");
         System.out.println("ParkingReroutePolicyTest: "+checks+" checks passed");
     }
     private interface Checked{void run()throws Exception;}

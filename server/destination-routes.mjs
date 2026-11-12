@@ -304,24 +304,33 @@ export async function planDestinationRoutes(input, { env = process.env, fetchImp
   // fall back to a different scenic place or to a client-supplied coordinate.
   const selected = scenicSelection === undefined ? null : selectionSigner.verify(scenicSelection, destination);
   const options = { key: keyFrom(env), fetchImpl, deadline: Date.now() + 50000 };
-  if (mode === 'photo-destination') {
+  // A chosen scenery photo can be the final destination (photo-destination). The road to it is
+  // the fast road; a published drive course or a scenic road to that same place is offered next to
+  // it only when the client explicitly sends extra minutes, and every road must still end within 150 m.
+  const photo = mode === 'photo-destination';
+  let goal = destination, photoName = '';
+  if (photo) {
     const { id, name, address, lat, lon } = selected;
-    const target = { id, name, ...(address === undefined ? {} : { address }), lat, lon };
-    if (distanceMeters(origin, target) < 50) throw new ApiError('이미 선택한 사진 장소 가까이에 있습니다. 다른 사진 장소를 선택해 주세요.', 422);
-    // The region is a search anchor only. Never route back to it after the photo.
-    const route = await roadRoute(origin, target, null, { ...options, exactDestination: true });
-    if (!route) throw new ApiError('선택한 사진 장소 150m 이내에 도착하는 자동차 경로를 확인하지 못했습니다. 지역 중심이나 다른 장소로 바꾸지 않았어요.', 422);
-    const { durationSeconds, ...publicRoute } = route;
-    return { mode, requestedDestination: destination, origin, destination: target, scenicStatus: 'ok',
-      routes: [{ ...publicRoute, id: 'fast', title: '사진 장소로 가는 길', scenicLabels: [name], waypoints: [],
-        reason: `선택한 ${name}을 최종 목적지로 안내합니다. 지역 탐색 기준점으로 돌아가지 않습니다. 사진 촬영 지점·차창 조망은 미확인입니다.` }],
-      message: '선택한 사진의 관광 장소로 갑니다. 도로 끝점이 장소 좌표 150m 이내인지 확인했습니다. 좌표는 대표 장소 위치이며 정확한 촬영 지점이나 주차장 입구가 아닙니다.' };
+    goal = { id, name, ...(address === undefined ? {} : { address }), lat, lon };
+    photoName = name;
+    if (distanceMeters(origin, goal) < 50) throw new ApiError('이미 선택한 사진 장소 가까이에 있습니다. 다른 사진 장소를 선택해 주세요.', 422);
   }
-  const { durationSeconds: baselineSeconds, ...baseline } = await roadRoute(origin, destination, null, options);
-  const fast = { ...baseline, id: 'fast', title: '빠른 경로', scenicLabels: [], waypoints: [], reason: '카카오의 시간 우선 옵션으로 조회한 목적지까지의 도로 경로입니다.' };
-  const response = (scenicStatus, message, scenic) => ({ origin, destination, routes: scenic ? [fast, ...[].concat(scenic)] : [fast], scenicStatus, message });
-  if (extraMinutes === 0) return response('disabled', '추가 시간이 0분이어서 빠른 경로만 표시합니다.');
-  if (selected) {
+  const opts = photo ? { ...options, exactDestination: true } : options;
+  const extra = photo && input.extraMinutes === undefined ? 0 : extraMinutes;
+  // The region is a search anchor only. Never route back to it after the photo.
+  const baselineRoute = await roadRoute(origin, goal, null, opts);
+  if (!baselineRoute) throw new ApiError('선택한 사진 장소 150m 이내에 도착하는 자동차 경로를 확인하지 못했습니다. 지역 중심이나 다른 장소로 바꾸지 않았어요.', 422);
+  const { durationSeconds: baselineSeconds, ...baseline } = baselineRoute;
+  const fast = photo
+    ? { ...baseline, id: 'fast', title: '사진 장소로 가는 길', scenicLabels: [photoName], waypoints: [],
+      reason: `선택한 ${photoName}을 최종 목적지로 안내합니다. 지역 탐색 기준점으로 돌아가지 않습니다. 사진 촬영 지점·차창 조망은 미확인입니다.` }
+    : { ...baseline, id: 'fast', title: '빠른 경로', scenicLabels: [], waypoints: [], reason: '카카오의 시간 우선 옵션으로 조회한 목적지까지의 도로 경로입니다.' };
+  const response = (scenicStatus, message, scenic) => ({ ...(photo ? { mode, requestedDestination: destination } : {}), origin, destination: goal,
+    routes: scenic ? [fast, ...[].concat(scenic)] : [fast], scenicStatus, message });
+  if (extra === 0) return photo
+    ? response('ok', '선택한 사진의 관광 장소로 갑니다. 도로 끝점이 장소 좌표 150m 이내인지 확인했습니다. 좌표는 대표 장소 위치이며 정확한 촬영 지점이나 주차장 입구가 아닙니다.')
+    : response('disabled', '추가 시간이 0분이어서 빠른 경로만 표시합니다.');
+  if (selected && !photo) {
     let route;
     try { route = await roadRoute(origin, destination, selected, { ...options, exactSelection: true }); }
     catch { return response('provider_unavailable', '선택한 사진 장소의 도로 정보를 확인하지 못해 빠른 경로만 표시합니다. 다른 장소로 바꾸지 않았어요.'); }
@@ -335,22 +344,22 @@ export async function planDestinationRoutes(input, { env = process.env, fetchImp
       reason: `선택한 ${name} 인근 도로를 경유해 같은 목적지로 갑니다. 사진의 실제 촬영 위치와 차창 조망은 미확인입니다.`,
     });
   }
-  const budgetSeconds = extraMinutes * 60;
+  const budgetSeconds = extra * 60;
   const withinBudget = route => route.durationSeconds <= baselineSeconds + budgetSeconds && route.distanceKm <= fast.distanceKm * 1.6 + 3;
   const distinctPath = route => !(route.coordinates.length === fast.coordinates.length && route.coordinates.every((p, i) => p[0] === fast.coordinates[i][0] && p[1] === fast.coordinates[i][1]));
   // Avoiding every 자동차 전용 도로 often exceeds the budget between cities, so one more
   // lookup may allow them. The same budget and approach checks still apply to that road.
   const scenicRoad = async stops => {
-    const route = await roadRoute(origin, destination, stops, options);
+    const route = await roadRoute(origin, goal, stops, opts);
     if (!route || withinBudget(route)) return route;
-    const mixed = await roadRoute(origin, destination, stops, { ...options, allowMotorway: true });
+    const mixed = await roadRoute(origin, goal, stops, { ...opts, allowMotorway: true });
     return mixed && { ...mixed, motorway: true };
   };
   const fastStats = scenery ? measure(fast, scenery) : null;
 
   // A published drive course is offered next to the computed road, never blended into its score.
   let curated = null;
-  for (const match of selectCuratedCandidates({ origin, destination, theme, fast, extraMinutes }, courses)) {
+  for (const match of selectCuratedCandidates({ origin, destination: goal, theme, fast, extraMinutes: extra }, courses)) {
     let route;
     try { route = await scenicRoad(match.stops); } catch { break; }
     if (!route || !withinBudget(route) || !distinctPath(route)) continue;
@@ -378,7 +387,7 @@ export async function planDestinationRoutes(input, { env = process.env, fetchImp
 
   let candidates;
   // With measurements, more places are tried as roads and ranked by the scenery along each road.
-  try { candidates = selectScenicCandidates({ origin, destination, theme, fast, extraMinutes, limit: fastStats ? 5 : 3 }, catalog); }
+  try { candidates = selectScenicCandidates({ origin, destination: goal, theme, fast, extraMinutes: extra, limit: fastStats ? 5 : 3 }, catalog); }
   catch { return withCurated('provider_unavailable', '풍경 기초정보를 확인하지 못해 빠른 경로만 표시합니다.'); }
   if (!candidates.length) return withCurated('no_candidates', `목적지로 가는 길 주변에서 ${theme === 'all' ? '조건에 맞는' : `선택한 ‘${SCENIC_THEMES[theme]}’`} 풍경 통과 지점을 찾지 못해 빠른 경로만 표시합니다.`);
   // Require a real approach toward every scenery stop, independent of polyline sampling.

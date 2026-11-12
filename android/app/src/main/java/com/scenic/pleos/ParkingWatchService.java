@@ -33,7 +33,12 @@ import java.util.concurrent.Executors;
 /** User-started inventory watch continues while the Pleos navigation screen is foreground. */
 public final class ParkingWatchService extends Service {
     private static final String PREFS="parking_watch",STOP="com.scenic.pleos.STOP_PARKING_WATCH",CHANNEL="scenic_parking_watch";
-    private static final int NOTIFICATION=72;
+    private static final String ACCEPT="com.scenic.pleos.ACCEPT_PARKING_PROPOSAL",DECLINE="com.scenic.pleos.DECLINE_PARKING_PROPOSAL",PROPOSAL_CHANNEL="scenic_parking_proposal";
+    private static final int NOTIFICATION=72,PROPOSAL_NOTIFICATION=73;
+    private ParkingReroutePolicy.Proposal proposal;
+    private final Set<String> declined=new HashSet<>();
+    private String acceptedAlt;
+    private boolean userAccepted;
     private static final long INTERVAL=60000,MAX_DURATION=3*60*60*1000L;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
@@ -57,6 +62,15 @@ public final class ParkingWatchService extends Service {
     }
     public static void stop(Context context){context.stopService(new Intent(context,ParkingWatchService.class));}
     public static String status(Context context){return context.getSharedPreferences(PREFS,0).getString("message","");}
+    /** One-line suggestion shown in the app banner; empty when nothing is waiting for the driver. */
+    public static String proposalText(Context context){return context.getSharedPreferences(PREFS,0).getString("proposalText","");}
+    public static void accept(Context context){try{context.startService(new Intent(context,ParkingWatchService.class).setAction(ACCEPT));}catch(RuntimeException unavailable){}}
+    public static void decline(Context context){try{context.startService(new Intent(context,ParkingWatchService.class).setAction(DECLINE));}catch(RuntimeException unavailable){}}
+    static String proposalMessage(ParkingReroutePolicy.Proposal value,DestinationPlace current){
+        String free=value.alternativeAvailability.availableSpaces==null?"":" · 빈자리 "+value.alternativeAvailability.availableSpaces+"면";
+        String state=ParkingReroutePolicy.Proposal.FULL.equals(value.level)?current.name+"이 만차예요.":current.name+"이 곧 만차예요"+(value.current.availableSpaces==null?"":"(남은 자리 "+value.current.availableSpaces+"면)")+".";
+        return state+" "+value.alternative.name+free+"으로 바꿀까요?";
+    }
     public static boolean active(Context context){return context.getSharedPreferences(PREFS,0).getBoolean("active",false);}
     public static void stopIfJourneyChanged(Context context,JourneyState journey){
         SharedPreferences prefs=context.getSharedPreferences(PREFS,0);
@@ -71,6 +85,11 @@ public final class ParkingWatchService extends Service {
     }
     @Override public IBinder onBind(Intent intent){return null;}
     @Override public int onStartCommand(Intent intent,int flags,int startId){
+        if(intent!=null&&(ACCEPT.equals(intent.getAction())||DECLINE.equals(intent.getAction()))){
+            if(target==null||stopping){stopSelf();return START_NOT_STICKY;}
+            if(ACCEPT.equals(intent.getAction()))acceptProposal();else declineProposal();
+            return START_NOT_STICKY;
+        }
         if(intent==null||STOP.equals(intent.getAction())){stop("자동 주차 확인을 중단했어요.");return START_NOT_STICKY;}
         try{
             reset();JourneyState trip=JourneyState.restore(intent.getStringExtra("journey"));target=trip.parking();if(target==null)throw new IllegalArgumentException();
@@ -78,8 +97,8 @@ public final class ParkingWatchService extends Service {
             started=SystemClock.elapsedRealtime();visited.add(target.id);
             List<String> excluded=intent.getStringArrayListExtra("excluded");if(excluded!=null&&excluded.size()<=100)for(String id:excluded)if(id!=null&&id.matches("[0-9]{1,100}"))visited.add(id);
             getSharedPreferences(PREFS,0).edit().clear().putBoolean("active",true).putString("journeyId",journeyId).putString("targetId",target.id).putString("appTargetId",target.id).apply();
-            NotificationManager manager=getSystemService(NotificationManager.class);manager.createNotificationChannel(new NotificationChannel(CHANNEL,"주차 빈자리 확인",NotificationManager.IMPORTANCE_LOW));
-            startForeground(NOTIFICATION,notification("안내 중 1분마다 확인 · 제공처 갱신 시각 확인 시 만차 자동 변경"));
+            NotificationManager manager=getSystemService(NotificationManager.class);manager.createNotificationChannel(new NotificationChannel(CHANNEL,"주차 빈자리 확인",NotificationManager.IMPORTANCE_LOW));manager.createNotificationChannel(new NotificationChannel(PROPOSAL_CHANNEL,"주차장 변경 제안",NotificationManager.IMPORTANCE_HIGH));
+            startForeground(NOTIFICATION,notification("안내 중 1분마다 확인 · 만차이거나 곧 만차가 되면 변경을 제안해요"));
             connect();main.postDelayed(routeTimeout,90000);
         }catch(Exception|LinkageError unavailable){stop("자동 주차 확인을 시작하지 못했어요. 정차 후 주차 목록을 새로고침해 주세요.");}
         return START_NOT_STICKY;
@@ -106,16 +125,16 @@ public final class ParkingWatchService extends Service {
             if(matches(pending,info)){
                 target=pending;pending=null;pendingAvailability=pendingCurrent=null;replacing=false;owned=true;ownedAt=SystemClock.elapsedRealtime();lastReroute=ownedAt;changes++;visited.add(target.id);main.removeCallbacks(routeTimeout);
                 try{getSharedPreferences(PREFS,0).edit().putString("replacement",json(target).toString()).putString("targetId",target.id).apply();}catch(Exception ignored){}
-                update("만차로 확인되어 "+target.name+"으로 안내를 변경했어요.");schedule();
+                userAccepted=false;acceptedAlt=null;update("제안을 수락해 "+target.name+"으로 안내를 변경했어요.");schedule();
             }
             return;
         }
         if(matches(target,info)){
             ownedAt=SystemClock.elapsedRealtime();boolean first=!owned;owned=true;main.removeCallbacks(routeTimeout);
             if(pending!=null){
-                if(pendingAvailability==null||pendingCurrent==null||!pendingCurrent.isFull(SystemClock.elapsedRealtime())||!pendingAvailability.isAvailable(SystemClock.elapsedRealtime())||!pendingCurrent.hasVerifiedObservation(SystemClock.elapsedRealtime())||!pendingAvailability.hasVerifiedObservation(SystemClock.elapsedRealtime())){pending=null;pendingAvailability=pendingCurrent=null;schedule();return;}
+                if(!userAccepted||pendingAvailability==null||!pendingAvailability.isAvailable(SystemClock.elapsedRealtime())){pending=null;pendingAvailability=pendingCurrent=null;userAccepted=false;acceptedAlt=null;update("제안한 주차장의 빈자리를 다시 확인하지 못해 변경하지 않았어요.");schedule();return;}
                 replace();
-            }else if(first){update("주차 빈자리 확인 중 · 제공처 갱신 시각 확인 시 만차 자동 변경");schedule();}
+            }else if(first){update("주차 빈자리 확인 중 · 만차이거나 곧 만차가 되면 변경을 제안해요");schedule();}
         }else if(owned){stop("순정 내비 목적지가 바뀌어 자동 주차 확인을 중단했어요.");}
     }
     private void schedule(){main.removeCallbacks(tick);if(!stopping)main.postDelayed(tick,INTERVAL);}
@@ -125,10 +144,10 @@ public final class ParkingWatchService extends Service {
         if(!owned||replacing||loading){schedule();return;}
         readDestination();loading=true;final int token=generation;final DestinationPlace expected=target;final Set<String> excluded=new HashSet<>(visited);
         executor.submit(()->{
-            ParkingReroutePolicy.Decision decision=null;String failure=null;
+            ParkingReroutePolicy.Proposal decision=null;String failure=null;final String preferred=acceptedAlt;
             try{
                 ScenicApiClient request=new ScenicApiClient(base);client=request;
-                decision=ParkingReroutePolicy.evaluateForAutomaticReroute(request.nearbyParking(anchor,expected.id),expected,excluded,SystemClock.elapsedRealtime());
+                decision=ParkingReroutePolicy.propose(request.nearbyParking(anchor,expected.id),expected,excluded,SystemClock.elapsedRealtime(),preferred);
                 if(decision.alternative!=null){
                     DestinationRoutePlan road=DestinationRoutePlan.parse(request.destinationRoutes(expected.lat,expected.lon,decision.alternative,0,"all"),decision.alternative,expected.lat,expected.lon,0,"all");
                     double[] end=road.fast.coordinates[road.fast.coordinates.length-1];
@@ -136,35 +155,89 @@ public final class ParkingWatchService extends Service {
                 }
             }catch(Exception unavailable){failure="빈자리 또는 대체 도로를 확인하지 못했어요. 현재 안내를 유지합니다.";}
             finally{client=null;}
-            final ParkingReroutePolicy.Decision result=decision;final String error=failure;
+            final ParkingReroutePolicy.Proposal result=decision;final String error=failure;
             main.post(()->{
                 if(!valid(token)||!ParkingReroutePolicy.samePlace(target,expected))return;loading=false;
-                if(error!=null){update(error);schedule();return;}
+                if(error!=null){if(userAccepted){userAccepted=false;acceptedAlt=null;update("빈자리를 다시 확인하지 못해 변경하지 않았어요. 현재 안내를 유지합니다.");}else update(error);schedule();return;}
                 long now=SystemClock.elapsedRealtime();
-                if(result.current.isSnapshot()){update(result.current.isFresh(now)?target.name+" · 공식 조회 "+result.current.availableSpaces+"면 · 제공처 갱신 시각 미제공으로 자동 변경 보류":"조회한 주차 현황이 오래되어 현재 안내를 유지합니다.");schedule();return;}
-                if(!result.current.isFull(now)){update(result.current.isAvailable(now)?target.name+" · 빈자리 "+result.current.availableSpaces+"면 확인":"현재 빈자리 미확인 · 기존 안내 유지");schedule();return;}
-                if(result.alternative==null){update("목적지가 만차예요. 주변에서 빈자리가 확인된 대체 주차장을 찾지 못했어요.");schedule();return;}
-                if(changes>=3||lastReroute>0&&SystemClock.elapsedRealtime()-lastReroute<120000){update("잦은 목적지 변경을 막기 위해 현재 안내를 유지합니다. 정차 후 주차 목록을 확인해 주세요.");schedule();return;}
-                pending=result.alternative;pendingAvailability=result.alternativeAvailability;pendingCurrent=result.current;
-                // Re-read actual native destination after network/road work; never overwrite another route.
-                readDestination();main.postDelayed(()->{if(valid(token)&&pending!=null&&!replacing){pending=null;pendingAvailability=pendingCurrent=null;update("현재 내비 목적지를 재확인하지 못해 자동 변경하지 않았어요.");schedule();}},10000);
-            });
+                if(result.level==null){
+                    clearProposal();userAccepted=false;acceptedAlt=null;
+                    update(result.current.isAvailable(now)?target.name+" · 빈자리 "+result.current.availableSpaces+"면 확인":result.current.isSnapshot()&&result.current.isFresh(now)?target.name+" · 공식 조회 확인":"현재 빈자리 미확인 · 기존 안내 유지");schedule();return;
+                }
+                String state=ParkingReroutePolicy.Proposal.FULL.equals(result.level)?"만차예요":"곧 만차예요";
+                if(result.alternative==null){clearProposal();userAccepted=false;acceptedAlt=null;update("목적지가 "+state+". 주변에서 더 여유 있는 주차장을 찾지 못했어요.");schedule();return;}
+                if(userAccepted){
+                    if(changes>=3||lastReroute>0&&now-lastReroute<120000){userAccepted=false;acceptedAlt=null;update("잦은 목적지 변경을 막기 위해 현재 안내를 유지합니다. 정차 후 주차 목록을 확인해 주세요.");schedule();return;}
+                    pending=result.alternative;pendingAvailability=result.alternativeAvailability;pendingCurrent=result.current;clearProposal();
+                    // Re-read the actual native destination after network/road work; never overwrite another route.
+                    readDestination();main.postDelayed(()->{if(valid(token)&&pending!=null&&!replacing){pending=null;pendingAvailability=pendingCurrent=null;userAccepted=false;acceptedAlt=null;update("현재 내비 목적지를 재확인하지 못해 변경하지 않았어요.");schedule();}},10000);
+                    return;
+                }
+                if(declined.contains(result.key())){clearProposal();update("목적지가 "+state+" · 제안을 거절하셔서 현재 안내를 유지합니다.");schedule();return;}
+                showProposal(result);schedule();            });
         });
     }
     private void replace(){
         if(stopping||pending==null||!owned||SystemClock.elapsedRealtime()-ownedAt>10000)return;
         replacing=true;sawRouteEvent=false;main.removeCallbacks(tick);main.removeCallbacks(routeTimeout);main.postDelayed(routeTimeout,45000);
-        try{helper.requestRoute(new RouteInfo(pending.lat,pending.lon,null,null,pending.name,"",pending.address,"",RouteOption.RECOMMENDED,"",false));update("목적지 만차 · "+pending.name+" 빈자리 확인 후 대체 안내 요청 중");}
+        try{helper.requestRoute(new RouteInfo(pending.lat,pending.lon,null,null,pending.name,"",pending.address,"",RouteOption.RECOMMENDED,"",false));update(pending.name+" 빈자리 확인 · 수락하신 대로 변경 안내를 요청 중");}
         catch(RuntimeException|LinkageError unavailable){stop("대체 주차장 안내를 요청하지 못했어요. 정차 후 주차 목록을 확인해 주세요.");}
     }
-    private Notification notification(String text){
+    private android.view.View overlay;
+    /** Draws the suggestion over the native navigation screen when the user allowed "display over other apps". */
+    private void showOverlay(String text){
+        hideOverlay();
+        if(!android.provider.Settings.canDrawOverlays(this))return;
+        try{
+            android.view.WindowManager windows=getSystemService(android.view.WindowManager.class);float d=getResources().getDisplayMetrics().density;int pad=(int)(20*d);
+            android.widget.LinearLayout card=new android.widget.LinearLayout(this);card.setOrientation(android.widget.LinearLayout.VERTICAL);card.setPadding(pad,pad,pad,pad);
+            android.graphics.drawable.GradientDrawable background=new android.graphics.drawable.GradientDrawable();background.setColor(0xF0102A2A);background.setCornerRadius(16*d);card.setBackground(background);
+            android.widget.TextView title=new android.widget.TextView(this);title.setText("SCENIC · 주차장 변경 제안");title.setTextColor(0xFFB7D6CF);title.setTextSize(18);card.addView(title);
+            android.widget.TextView body=new android.widget.TextView(this);body.setText(text);body.setTextColor(0xFFFFFFFF);body.setTextSize(26);body.setPadding(0,(int)(8*d),0,(int)(14*d));card.addView(body);
+            android.widget.LinearLayout choices=new android.widget.LinearLayout(this);choices.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            android.widget.Button yes=new android.widget.Button(this),no=new android.widget.Button(this);yes.setText("변경");no.setText("유지");yes.setTextSize(24);no.setTextSize(24);
+            yes.setOnClickListener(v->acceptProposal());no.setOnClickListener(v->declineProposal());
+            android.widget.LinearLayout.LayoutParams half=new android.widget.LinearLayout.LayoutParams(0,android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,1);half.setMargins(0,0,(int)(8*d),0);choices.addView(yes,half);choices.addView(no,new android.widget.LinearLayout.LayoutParams(0,android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,1));card.addView(choices);
+            android.view.WindowManager.LayoutParams params=new android.view.WindowManager.LayoutParams((int)(640*d),android.view.WindowManager.LayoutParams.WRAP_CONTENT,android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,android.graphics.PixelFormat.TRANSLUCENT);
+            // Right side of the map keeps the native turn-by-turn card and the 2D button visible.
+            params.gravity=android.view.Gravity.TOP|android.view.Gravity.END;params.x=(int)(40*d);params.y=(int)(230*d);
+            windows.addView(card,params);overlay=card;
+        }catch(RuntimeException unavailable){overlay=null;Log.w("ScenicParkingWatch","overlay unavailable: "+unavailable);}
+    }
+    private void hideOverlay(){
+        android.view.View view=overlay;overlay=null;
+        if(view!=null)try{getSystemService(android.view.WindowManager.class).removeView(view);}catch(RuntimeException ignored){}
+    }
+    private void showProposal(ParkingReroutePolicy.Proposal value){
+        if(proposal!=null&&proposal.key().equals(value.key())){proposal=value;return;}
+        proposal=value;String text=proposalMessage(value,target);
+        getSharedPreferences(PREFS,0).edit().putString("proposalText",text).apply();update(text);showOverlay(text);
+        PendingIntent open=PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent yes=PendingIntent.getService(this,2,new Intent(this,ParkingWatchService.class).setAction(ACCEPT),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent no=PendingIntent.getService(this,3,new Intent(this,ParkingWatchService.class).setAction(DECLINE),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
+        getSystemService(NotificationManager.class).notify(PROPOSAL_NOTIFICATION,new Notification.Builder(this,PROPOSAL_CHANNEL).setSmallIcon(R.drawable.ic_scenic).setContentTitle("SCENIC · 주차장 변경 제안").setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text)).setContentIntent(open).setAutoCancel(true)
+            .addAction(new Notification.Action.Builder(null,"변경",yes).build()).addAction(new Notification.Action.Builder(null,"유지",no).build()).build());
+    }
+    private void clearProposal(){
+        proposal=null;hideOverlay();getSharedPreferences(PREFS,0).edit().remove("proposalText").apply();
+        try{getSystemService(NotificationManager.class).cancel(PROPOSAL_NOTIFICATION);}catch(RuntimeException ignored){}
+    }
+    private void acceptProposal(){
+        if(proposal==null||proposal.alternative==null||replacing)return;
+        acceptedAlt=proposal.alternative.id;userAccepted=true;clearProposal();update("수락하셨어요. 빈자리를 다시 확인한 뒤 안내를 변경합니다.");
+        main.removeCallbacks(tick);poll();
+    }
+    private void declineProposal(){
+        if(proposal==null)return;
+        declined.add(proposal.key());clearProposal();update("제안을 거절했어요. 현재 안내를 유지합니다.");
+    }    private Notification notification(String text){
         PendingIntent open=PendingIntent.getActivity(this,0,new Intent(this,MainActivity.class),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         PendingIntent stop=PendingIntent.getService(this,1,new Intent(this,ParkingWatchService.class).setAction(STOP),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this,CHANNEL).setSmallIcon(R.drawable.ic_scenic).setContentTitle("SCENIC · 주차 빈자리 확인").setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text)).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).addAction(new Notification.Action.Builder(null,"확인 중단",stop).build()).build();
     }
     private void update(String value){message=value;getSharedPreferences(PREFS,0).edit().putString("message",value).apply();Log.i("ScenicParkingWatch",value);if(!stopping)getSystemService(NotificationManager.class).notify(NOTIFICATION,notification(value));}
-    private void stop(String value){if(stopping)return;update(value);stopping=true;getSharedPreferences(PREFS,0).edit().putBoolean("active",false).apply();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();}
-    private void reset(){generation++;main.removeCallbacksAndMessages(null);ScenicApiClient old=client;if(old!=null)old.cancel();client=null;if(helper!=null){try{if(listener!=null)helper.removeListener(listener);helper.release();}catch(RuntimeException ignored){}}helper=null;listener=null;visited.clear();connected=owned=loading=replacing=stopping=sawRouteEvent=false;pending=null;pendingAvailability=pendingCurrent=null;changes=0;lastReroute=0;}
+    private void stop(String value){if(stopping)return;clearProposal();update(value);stopping=true;getSharedPreferences(PREFS,0).edit().putBoolean("active",false).apply();stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();}
+    private void reset(){generation++;main.removeCallbacksAndMessages(null);ScenicApiClient old=client;if(old!=null)old.cancel();client=null;if(helper!=null){try{if(listener!=null)helper.removeListener(listener);helper.release();}catch(RuntimeException ignored){}}helper=null;listener=null;visited.clear();declined.clear();proposal=null;acceptedAlt=null;userAccepted=false;connected=owned=loading=replacing=stopping=sawRouteEvent=false;pending=null;pendingAvailability=pendingCurrent=null;changes=0;lastReroute=0;}
     @Override public void onTimeout(int startId,int type){stop("시스템의 백그라운드 확인 시간이 끝났어요.");}
     @Override public void onDestroy(){stopping=true;reset();stopping=true;getSharedPreferences(PREFS,0).edit().putBoolean("active",false).apply();executor.shutdownNow();super.onDestroy();}
     private static JSONObject json(DestinationPlace p)throws Exception{return new JSONObject().put("id",p.id).put("name",p.name).put("address",p.address).put("lat",p.lat).put("lon",p.lon);}
