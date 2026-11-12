@@ -35,7 +35,7 @@ public final class ScenicCaptureDemo {
         boolean canInteract();
         void onCaptureSaved(ScenicCaptureStore.Record record);
     }
-    private static final int INK=0xff17191c,MUTED=0xff656970,LINE=0xffdfe1e4,SOFT=0xfff5f5f5,WHITE=0xffffffff;
+    private static final int INK=ScenicDesign.INK,MUTED=ScenicDesign.MUTED,LINE=ScenicDesign.LINE,SOFT=ScenicDesign.SOFT,WHITE=ScenicDesign.SURFACE;
     private static final String PREFS="scenic_capture_demo",KEY="local_records_v1";
     private final Activity activity;
     private final Host host;
@@ -60,7 +60,8 @@ public final class ScenicCaptureDemo {
     }
     public View createView(String routeId,String routeName,String destination,String segmentName,boolean wide,boolean showAllRecords) {
         panelRouteId=routeId;panelRouteName=routeName;panelDestination=destination;panelSegment=segmentName;panelWide=wide;panelAllRecords=showAllRecords;
-        panel=column();panel.setPadding(dp(24),dp(24),dp(24),dp(28));panel.setBackground(background(WHITE,LINE));
+        int inset=wide?24:16;
+        panel=column();panel.setPadding(dp(inset),dp(24),dp(inset),dp(32));panel.setBackground(background(WHITE,LINE));
         renderPanel();
         if(!wide)return panel;
         ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);
@@ -86,13 +87,13 @@ public final class ScenicCaptureDemo {
         final String previewKey=imageKey;final String route=routeName;final String previewDetail=detail;
         LinearLayout preview=column();
         preview.addView(photo(previewKey,108,caption),size(-1,108));
-        TextView noteView=text(note,12,MUTED,false);noteView.setPadding(0,dp(6),0,0);preview.addView(noteView);
-        preview.setContentDescription(caption+". 샘플 사진. 큰 미리보기 열기");preview.setFocusable(true);
+        TextView noteView=text(note,14,MUTED,false);noteView.setPadding(0,dp(8),0,dp(8));preview.addView(noteView);
+        preview.setContentDescription(caption+". 샘플 사진. 큰 미리보기 열기");tappable(preview);
         preview.setOnClickListener(v->{if(allowed())showPhoto(previewKey,route,previewDetail);});
         if(!checkpoints.isEmpty()){
             LinearLayout wrapper=column();wrapper.addView(preview);
             int count=routeId==null?0:store.countForCheckpoints(routeId,ids);
-            TextView summary=text("촬영 지점 "+checkpoints.size()+"곳 · 이 길에서 기록 "+count+"개",13,INK,true);summary.setPadding(0,dp(10),0,0);wrapper.addView(summary);
+            TextView summary=text("촬영 지점 "+checkpoints.size()+"곳 · 저장한 장면 "+count+"개",14,INK,true);summary.setPadding(0,dp(16),0,0);wrapper.addView(summary);
             wrapper.addView(autoCaptureSwitch());
             return wrapper;
         }
@@ -100,14 +101,14 @@ public final class ScenicCaptureDemo {
     }
     /** Recording at checkpoints is the user's choice and stays off until switched on. */
     private View autoCaptureSwitch() {
-        Switch toggle=new Switch(activity);toggle.setText("촬영 지점에서 자동 기록");toggle.setTextColor(INK);toggle.setTextSize(15);
-        toggle.setTypeface(ScenicTypography.font(activity,600));toggle.setMinHeight(dp(48));toggle.setChecked(store.autoCaptureEnabled());
+        Switch toggle=new Switch(activity);toggle.setText("촬영 지점에서 자동 기록");toggle.setTextColor(INK);toggle.setTextSize(16);
+        toggle.setTypeface(ScenicTypography.font(activity,600));styleSwitch(toggle);toggle.setChecked(store.autoCaptureEnabled());
         toggle.setOnCheckedChangeListener((view,checked)->{
             if(!host.canInteract()){view.setOnCheckedChangeListener(null);view.setChecked(store.autoCaptureEnabled());dismiss();return;}
             store.setAutoCaptureEnabled(checked);
         });
         LinearLayout box=column();box.addView(toggle,size(-1,-2));
-        TextView hint=text("켜면 바다·강·산길 구간이나 장소를 지날 때 자동으로 기록합니다. 지금은 샘플 기록이며 실제 차량 촬영은 하지 않습니다. 이 기기에만 저장됩니다.",12,MUTED,false);box.addView(hint);
+        TextView hint=text("켜면 촬영 지점을 지날 때 샘플 장면을 이 기기에 저장해요. 실제 차량 촬영은 하지 않아요.",14,MUTED,false);box.addView(hint);
         return box;
     }
     public boolean autoCaptureEnabled(){return store.autoCaptureEnabled();}
@@ -136,12 +137,12 @@ public final class ScenicCaptureDemo {
         catch(IllegalArgumentException invalid){toast("먼저 목적지와 경로를 선택해 주세요.");return;}
         dismiss();
         LinearLayout body=dialogBody();
-        body.addView(text("빌트인 캠 · 데모",13,MUTED,true));gap(body,8);
+        body.addView(text("촬영 시연",14,ScenicDesign.ACCENT,true));gap(body,8);
         body.addView(text("데모 촬영 완료",24,INK,true));gap(body,8);
         body.addView(text(draft.destination+"까지 · "+draft.segmentName,16,INK,false));gap(body,16);
-        body.addView(photo(draft.imageKey,190,location(draft.imageKey)+" · 예시 이미지"),size(-1,190));gap(body,8);
-        body.addView(text("샘플 사진 · 실제 차량 촬영 아님",13,MUTED,false));gap(body,6);
-        body.addView(sourceAction(draft.imageKey));gap(body,14);
+        body.addView(photo(draft.imageKey,192,location(draft.imageKey)+" · 예시 이미지"),size(-1,192));gap(body,8);
+        body.addView(text("샘플 사진 · 실제 차량 촬영 아님",14,MUTED,false));gap(body,8);
+        body.addView(sourceAction(draft.imageKey));gap(body,16);
         addSharingSwitch(body);
         gap(body,16);
         TextView save=button("경로 미리보기에 추가",true,()->{
@@ -166,78 +167,78 @@ public final class ScenicCaptureDemo {
     private void renderPanel() {
         if(panel==null)return;
         panel.removeAllViews();
-        panel.addView(text("SCENIC CAMERA",12,MUTED,true));gap(panel,8);
-        panel.addView(text("빌트인 캠 · 데모",26,INK,true));gap(panel,8);
-        panel.addView(text("마음에 드는 풍경을 담아, 경로를 고를 때 다시 만나요.",16,MUTED,false));gap(panel,20);
+        panel.addView(text("SCENIC CAMERA",12,ScenicDesign.ACCENT,true));gap(panel,8);
+        panel.addView(text("풍경 기록",28,INK,true));gap(panel,8);
+        panel.addView(text("샘플 사진으로 촬영과 경로 미리보기를 체험해요.",16,MUTED,false));gap(panel,24);
         boolean selected=panelRouteId!=null&&!panelRouteId.trim().isEmpty();
         if(selected) {
             String key=ScenicCaptureStore.imageKeyFor(panelSegment,panelDestination);
-            panel.addView(photo(key,panelWide?180:190,location(key)+" · 예시 이미지"),size(-1,panelWide?180:190));gap(panel,10);
-            panel.addView(text(value(panelDestination,"선택한 목적지")+"까지",19,INK,true));gap(panel,5);
-            panel.addView(text(value(panelSegment,"선택한 경로"),15,MUTED,false));gap(panel,14);
-            panel.addView(button("빌트인 캠 촬영",true,()->showCapture(panelRouteId,panelRouteName,panelDestination,panelSegment)),size(-1,-2));gap(panel,8);
-            panel.addView(text("샘플 사진으로 촬영을 체험해요. 실제 차량 촬영은 실행되지 않아요.",13,MUTED,false));
-            panel.addView(sourceAction(key));gap(panel,22);
+            panel.addView(photo(key,192,location(key)+" · 예시 이미지"),size(-1,192));gap(panel,16);
+            panel.addView(text(value(panelDestination,"선택한 목적지")+"까지",22,INK,true));gap(panel,8);
+            panel.addView(text(value(panelSegment,"선택한 경로"),16,MUTED,false));gap(panel,16);
+            panel.addView(button("샘플 촬영 체험",true,()->showCapture(panelRouteId,panelRouteName,panelDestination,panelSegment)),size(-1,-2));gap(panel,8);
+            panel.addView(text("실제 차량 촬영은 실행되지 않아요.",14,MUTED,false));
+            panel.addView(sourceAction(key));gap(panel,24);
         } else {
-            panel.addView(text("목적지와 경로를 선택하면 촬영 데모를 시작할 수 있어요.",15,MUTED,false));gap(panel,20);
+            panel.addView(text("목적지와 경로를 선택한 뒤 촬영을 체험해 보세요.",16,MUTED,false));gap(panel,24);
         }
-        View divider=new View(activity);divider.setBackgroundColor(LINE);panel.addView(divider,size(-1,1));gap(panel,20);
+        View divider=new View(activity);divider.setBackgroundColor(LINE);panel.addView(divider,size(-1,1));gap(panel,24);
         List<ScenicCaptureStore.Record> records=store.recordsForRoute(panelAllRecords?null:panelRouteId);
-        panel.addView(text("데모 갤러리  "+records.size(),21,INK,true));gap(panel,7);
+        panel.addView(text("저장한 샘플  "+records.size(),22,INK,true));gap(panel,8);
         panel.addView(text(selected&&!panelAllRecords?"선택한 경로에 저장한 장면이에요.":"이 기기에 저장한 풍경 기록이에요.",14,MUTED,false));gap(panel,16);
         if(records.isEmpty()) {
-            LinearLayout empty=column();empty.setPadding(dp(20),dp(24),dp(20),dp(24));empty.setBackground(background(SOFT,0));
+            LinearLayout empty=column();empty.setPadding(dp(24),dp(24),dp(24),dp(24));empty.setBackground(background(SOFT,0));
             empty.addView(text("첫 번째 풍경을 담아 보세요",18,INK,true));gap(empty,8);
             empty.addView(text("촬영 후 ‘경로 미리보기에 추가’를 누르면 여기에 남아요.",14,MUTED,false));panel.addView(empty,size(-1,-2));
         } else for(ScenicCaptureStore.Record record:records) {
-            LinearLayout card=column();card.setPadding(0,0,0,dp(20));
-            card.addView(photo(record.imageKey,panelWide?160:176,record.sharedPreview?"공유 미리보기":"내 장면"),size(-1,panelWide?160:176));gap(card,10);
-            card.addView(text(record.segmentName,19,INK,true));gap(card,5);
-            card.addView(text(record.destination+"까지 · "+new SimpleDateFormat("M월 d일 HH:mm",Locale.KOREA).format(new Date(record.createdAt)),14,MUTED,false));gap(card,5);
-            card.addView(text("샘플 사진 · 실제 차량 촬영 아님",12,MUTED,false));gap(card,3);
-            card.addView(text(credit(record.imageKey),12,MUTED,false));
+            LinearLayout card=column();card.setPadding(dp(16),dp(16),dp(16),dp(16));card.setBackground(background(SOFT,LINE));
+            card.addView(photo(record.imageKey,panelWide?160:176,record.sharedPreview?"공유 미리보기":"내 장면"),size(-1,panelWide?160:176));gap(card,16);
+            card.addView(text(record.segmentName,20,INK,true));gap(card,8);
+            card.addView(text(record.destination+"까지 · "+new SimpleDateFormat("M월 d일 HH:mm",Locale.KOREA).format(new Date(record.createdAt)),14,MUTED,false));gap(card,8);
+            card.addView(text("샘플 사진 · 실제 차량 촬영 아님",14,MUTED,false));gap(card,8);
+            card.addView(text(credit(record.imageKey),14,MUTED,false));
             card.setContentDescription(record.segmentName+". "+record.destination+"까지의 경로에 저장한 데모 사진. 상세 열기");
-            card.setFocusable(true);card.setOnClickListener(v->{if(allowed())showPhoto(record.imageKey,record.segmentName,record.destination+"까지 · "+(record.sharedPreview?"공유 미리보기":"내 장면")+"\n이 기기에만 저장된 데모 기록입니다.");});
-            panel.addView(card,size(-1,-2));
-            panel.addView(button("이 샘플 기록 삭제",false,()->{if(!allowed())return;dialog=new AlertDialog.Builder(activity).setTitle("이 샘플 기록을 삭제할까요?").setMessage("이 기기의 샘플 기록만 삭제합니다. 이미 저장한 리캡 영상은 유지됩니다.").setPositiveButton("삭제",(d,w)->{if(allowed()){store.remove(record.id);renderPanel();}}).setNegativeButton("취소",null).show();}),size(-1,-2));gap(panel,14);
+            tappable(card);card.setOnClickListener(v->{if(allowed())showPhoto(record.imageKey,record.segmentName,record.destination+"까지 · "+(record.sharedPreview?"공유 미리보기":"내 장면")+"\n이 기기에만 저장된 데모 기록입니다.");});
+            panel.addView(card,size(-1,-2));gap(panel,8);
+            panel.addView(button("이 샘플 기록 삭제",false,()->{if(!allowed())return;dialog=new AlertDialog.Builder(activity).setTitle("이 샘플 기록을 삭제할까요?").setMessage("이 기기의 샘플 기록만 삭제합니다. 이미 저장한 리캡 영상은 유지됩니다.").setPositiveButton("삭제",(d,w)->{if(allowed()){store.remove(record.id);renderPanel();}}).setNegativeButton("취소",null).show();}),size(-1,-2));gap(panel,24);
         }
-        gap(panel,8);panel.addView(text("공유 미리보기는 이 기기에서만 보여요. 다른 운전자에게 전송되지 않아요.",13,MUTED,false));
+        gap(panel,8);panel.addView(text("공유 미리보기는 이 기기에서만 보여요. 다른 운전자에게 전송되지 않아요.",14,MUTED,false));
     }
     private void addSharingSwitch(LinearLayout body) {
         Switch toggle=new Switch(activity);toggle.setText("공유 미리보기에 표시");toggle.setTextColor(INK);toggle.setTextSize(16);
-        toggle.setTypeface(ScenicTypography.font(activity,600));toggle.setMinHeight(dp(56));toggle.setSwitchMinWidth(dp(52));toggle.setChecked(store.sharingEnabled());
+        toggle.setTypeface(ScenicTypography.font(activity,600));styleSwitch(toggle);toggle.setChecked(store.sharingEnabled());
         toggle.setOnCheckedChangeListener((view,checked)->{
             if(!host.canInteract()){view.setOnCheckedChangeListener(null);view.setChecked(store.sharingEnabled());dismiss();return;}
             store.setSharingEnabled(checked);
-        });body.addView(toggle,size(-1,-2));gap(body,6);
-        body.addView(text("다른 운전자의 경로 선택 화면을 본뜬 공유 미리보기에 표시해요. 이 기기에만 저장되며 다른 운전자에게 전송되지 않아요.",13,MUTED,false));
+        });body.addView(toggle,size(-1,-2));gap(body,8);
+        body.addView(text("경로 선택 화면의 공유 예시에 표시해요. 이 기기에만 저장되며 다른 운전자에게 전송되지 않아요.",14,MUTED,false));
     }
     private void showPhoto(String key,String title,String detail) {
-        dismiss();LinearLayout body=dialogBody();body.addView(text(value(title,"공유 예시"),22,INK,true));gap(body,12);
-        body.addView(photo(key,220,location(key)+" · 예시 이미지"),size(-1,220));gap(body,10);
-        body.addView(text("샘플 사진 · 실제 차량 촬영 아님",13,MUTED,true));gap(body,10);body.addView(text(detail,15,INK,false));gap(body,14);
+        dismiss();LinearLayout body=dialogBody();body.addView(text(value(title,"공유 예시"),24,INK,true));gap(body,16);
+        body.addView(photo(key,224,location(key)+" · 예시 이미지"),size(-1,224));gap(body,16);
+        body.addView(text("샘플 사진 · 실제 차량 촬영 아님",14,MUTED,true));gap(body,8);body.addView(text(detail,16,INK,false));gap(body,16);
         body.addView(sourceDetails(key));gap(body,16);body.addView(button("닫기",true,this::dismiss),size(-1,-2));showDialog(body);
     }
     private View sourceAction(String key) {
         LinearLayout source=column();if("none".equals(key))return source;
-        TextView label=text(credit(key)+"  ·  출처 보기",12,MUTED,false);label.setPadding(0,dp(10),0,dp(10));label.setMinHeight(dp(44));label.setFocusable(true);
+        TextView label=text(credit(key)+"  ·  출처 보기",14,ScenicDesign.ACCENT,false);label.setPadding(dp(8),dp(16),dp(8),dp(16));label.setMinHeight(dp(ScenicDesign.TOUCH_HEIGHT));label.setGravity(Gravity.CENTER_VERTICAL);label.setContentDescription("사진 출처 펼치기. "+credit(key));tappable(label);
         TextView details=sourceDetails(key);details.setVisibility(View.GONE);source.addView(label);source.addView(details);
-        label.setOnClickListener(v->{if(allowed())details.setVisibility(details.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE);});return source;
+        label.setOnClickListener(v->{if(allowed()){boolean expanded=details.getVisibility()!=View.VISIBLE;details.setVisibility(expanded?View.VISIBLE:View.GONE);label.setText(credit(key)+(expanded?"  ·  출처 닫기":"  ·  출처 보기"));label.setContentDescription((expanded?"사진 출처 접기. ":"사진 출처 펼치기. ")+credit(key));}});return source;
     }
     private TextView sourceDetails(String key) {
-        if("none".equals(key)){TextView none=text("이 구간의 샘플 사진이 없어 표시하지 않습니다. 실제 차량 촬영이 아닙니다.",12,MUTED,false);return none;}
+        if("none".equals(key)){TextView none=text("이 구간의 샘플 사진이 없어 표시하지 않습니다. 실제 차량 촬영이 아닙니다.",14,MUTED,false);return none;}
         String url="haeundae".equals(key)?"https://commons.wikimedia.org/wiki/File:Busan_City_Haeundae_Beach.jpg":
             "gwangalli".equals(key)?"https://commons.wikimedia.org/wiki/File:Gwangalli_Beach_and_Gwangan_Bridge_Busan.jpg":"https://commons.wikimedia.org/wiki/File:Cheongsapo.jpg";
         String license="haeundae".equals(key)?"https://www.kogl.or.kr/info/licenseType1.do":"gwangalli".equals(key)?"https://creativecommons.org/licenses/by-sa/4.0/":"https://creativecommons.org/licenses/by-sa/3.0/";
-        TextView source=text(credit(key)+"\n공개 라이선스 사진을 화면에 맞춰 잘라 표시합니다. 선택한 도로의 실제 주행 시야를 나타내지는 않습니다.\n원본 사진\n"+url+"\n라이선스\n"+license,12,MUTED,false);Linkify.addLinks(source,Linkify.WEB_URLS);source.setLinkTextColor(INK);source.setMovementMethod(LinkMovementMethod.getInstance());return source;
+        TextView source=text(credit(key)+"\n공개 라이선스 사진을 화면에 맞춰 잘라 표시합니다. 선택한 도로의 실제 주행 시야를 나타내지는 않습니다.\n원본 사진\n"+url+"\n라이선스\n"+license,14,MUTED,false);Linkify.addLinks(source,Linkify.WEB_URLS);source.setLinkTextColor(ScenicDesign.ACCENT);source.setMovementMethod(LinkMovementMethod.getInstance());return source;
     }
     private View photo(String key,int height,String label) {
-        FrameLayout frame=new FrameLayout(activity);frame.setBackground(background(0xffe5e9eb,0));frame.setClipToOutline(true);
+        FrameLayout frame=new FrameLayout(activity);frame.setBackground(background(SOFT,0));frame.setClipToOutline(true);
         ImageView image=new ImageView(activity);image.setScaleType(ImageView.ScaleType.CENTER_CROP);image.setContentDescription(location(key)+" 샘플 사진. 실제 차량 촬영 아님.");
         Bitmap bitmap=bitmap(key);if(bitmap!=null)image.setImageBitmap(bitmap);
         frame.addView(image,new FrameLayout.LayoutParams(-1,-1));
-        TextView tag=text(label,13,WHITE,true);tag.setPadding(dp(12),dp(7),dp(12),dp(7));tag.setBackground(background(0xb017191c,0));
-        FrameLayout.LayoutParams badge=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.START);badge.setMargins(dp(12),0,dp(12),dp(12));frame.addView(tag,badge);
+        TextView tag=text(label,14,WHITE,true);tag.setPadding(dp(12),dp(8),dp(12),dp(8));tag.setBackground(background(ScenicDesign.HERO,0));
+        FrameLayout.LayoutParams badge=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.START);badge.setMargins(dp(16),0,dp(16),dp(16));frame.addView(tag,badge);
         return frame;
     }
     private Bitmap bitmap(String key) {
@@ -262,11 +263,14 @@ public final class ScenicCaptureDemo {
     private LinearLayout column(){LinearLayout view=new LinearLayout(activity);view.setOrientation(LinearLayout.VERTICAL);return view;}
     private LinearLayout.LayoutParams size(int width,int height){return new LinearLayout.LayoutParams(width<0?width:dp(width),height<0?height:dp(height));}
     private void gap(LinearLayout parent,int height){parent.addView(new View(activity),size(1,height));}
-    private GradientDrawable background(int color,int border){GradientDrawable result=new GradientDrawable();result.setColor(color);result.setCornerRadius(dp(10));if(border!=0)result.setStroke(dp(1),border);return result;}
-    private TextView text(String value,int size,int color,boolean bold){TextView text=new TextView(activity);text.setText(value);text.setTextSize(size);text.setTextColor(color);text.setTypeface(ScenicTypography.font(activity,bold?600:400));text.setIncludeFontPadding(false);text.setLineSpacing(dp(3),1);return text;}
+    private GradientDrawable background(int color,int border){GradientDrawable result=new GradientDrawable();result.setColor(color);result.setCornerRadius(dp(ScenicDesign.CARD_RADIUS));if(border!=0)result.setStroke(dp(1),border);return result;}
+    private TextView text(String value,int size,int color,boolean bold){TextView text=new TextView(activity);text.setText(value);text.setTextSize(size);text.setTextColor(color);text.setTypeface(ScenicTypography.font(activity,bold?600:400));text.setIncludeFontPadding(false);text.setLineSpacing(dp(4),1);return text;}
+    private void styleSwitch(Switch toggle){toggle.setMinHeight(dp(ScenicDesign.TOUCH_HEIGHT));toggle.setSwitchMinWidth(dp(56));toggle.setSwitchPadding(dp(16));toggle.setThumbTintList(ColorStateList.valueOf(WHITE));toggle.setTrackTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{ScenicDesign.ACCENT,MUTED}));}
+    private void tappable(View view){view.setFocusable(true);view.setClickable(true);view.setForeground(new RippleDrawable(ColorStateList.valueOf(ScenicDesign.RIPPLE),null,background(WHITE,0)));view.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View host,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(host,info);info.setClassName(Button.class.getName());}});}
     private TextView button(String label,boolean primary,Runnable action){
-        TextView button=text(label,16,primary?WHITE:INK,true);button.setGravity(Gravity.CENTER);button.setPadding(dp(16),dp(14),dp(16),dp(14));button.setMinHeight(dp(56));
-        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x2017191c),background(primary?INK:WHITE,primary?0:LINE),null));button.setFocusable(true);button.setClickable(true);
+        TextView button=text(label,16,primary?WHITE:INK,true);button.setGravity(Gravity.CENTER);button.setPadding(dp(16),dp(16),dp(16),dp(16));button.setMinHeight(dp(ScenicDesign.TOUCH_HEIGHT));
+        GradientDrawable surface=background(primary?ScenicDesign.ACCENT:WHITE,primary?0:LINE);surface.setCornerRadius(dp(ScenicDesign.CONTROL_RADIUS));
+        int ripple=primary?Color.argb(40,255,255,255):ScenicDesign.RIPPLE;button.setBackground(new RippleDrawable(ColorStateList.valueOf(ripple),surface,null));button.setFocusable(true);button.setClickable(true);button.setContentDescription(label);
         button.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View host,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(host,info);info.setClassName(Button.class.getName());}});
         button.setOnClickListener(v->action.run());return button;
     }

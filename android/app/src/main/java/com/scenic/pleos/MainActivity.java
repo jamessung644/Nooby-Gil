@@ -17,6 +17,9 @@ import android.net.Uri;
 import android.os.*;
 import android.provider.OpenableColumns;
 import android.provider.MediaStore;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ImageSpan;
 import android.view.*;
 import android.widget.*;
 import org.json.*;
@@ -26,7 +29,7 @@ import java.util.concurrent.*;
 
 /** Native competition prototype with an optional local API backend. */
 public final class MainActivity extends Activity implements LocationListener {
-    private static final int BG=0xfff5f7f5,PANEL=0xffffffff,LINE=0xffdee7e1,INK=0xff19332c,MUTED=0xff65766f,ACCENT=0xff2c6656,SOFT=0xffeaf1ec;
+    private static final int BG=ScenicDesign.BACKGROUND,PANEL=ScenicDesign.SURFACE,LINE=ScenicDesign.LINE,INK=ScenicDesign.INK,MUTED=ScenicDesign.MUTED,ACCENT=ScenicDesign.ACCENT,SOFT=ScenicDesign.SOFT;
     private boolean wide;
     private int windowWidthDp,windowHeightDp,fontBoost;
     private static final int GPS_PERMISSION=41,CAR_PERMISSION=42,VIDEO_PICK=43,AUDIO_PICK=44;
@@ -51,17 +54,11 @@ public final class MainActivity extends Activity implements LocationListener {
     private VehicleBridge vehicle;
     private LocationManager locationManager;
     private LinearLayout root,content;
-    private TextView statusView,detailView,progressView,noticeView,soundStatus;
+    private TextView statusView,detailView,progressView,noticeView;
     private ScenicMapView map;
     private KakaoMapView kakaoMap;
     private boolean useKakaoMap=true,centerNextFix,mapGpsEnabled;
-    private String musicMessage="AI가 드라이브에 어울리는 실제 플레이리스트를 고릅니다.";
-    private final MusicRecommendationState musicState=new MusicRecommendationState();
-    private Future<?> musicJob;
-    private ScenicApiClient musicClient;
-    private boolean musicWasBlocked;
     private AlertDialog videoDialog, actionDialog;
-    private MusicWebDialog musicWebDialog;
     private boolean actionDialogForConnection;
     private VideoView videoView;
     private JSONArray memories;
@@ -77,6 +74,7 @@ public final class MainActivity extends Activity implements LocationListener {
     private DestinationPlace destinationPlace;
     private DestinationRoutePlan destinationPlan;
     private DestinationRoutePlan.Route chosenDestinationRoute;
+    private boolean destinationFailed,destinationRoadUnavailable;
     private ScenicCaptureDemo captureDemo;
     private ScenicDiscoveryView discoveryView;
     private DestinationPhotoView destinationPhotoView;
@@ -100,12 +98,18 @@ public final class MainActivity extends Activity implements LocationListener {
     private long parkingPermissionDeadline,parkingPermissionRevision;
     private boolean parkingChecking;
     private int parkingCheckRedirects;
-    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener parkingWatchListener=(prefs,key)->{if("proposalText".equals(key)||"message".equals(key))handler.post(()->{if(resumed&&tab==0)render();});};
+    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener parkingWatchListener=(prefs,key)->{
+        if("proposalText".equals(key)||"message".equals(key)||"replacement".equals(key)||"targetId".equals(key)||"active".equals(key))handler.post(()->{
+            if(!resumed||isDestroyed()||isFinishing())return;
+            // A native replacement can finish while this activity remains in the foreground.
+            boolean changed=syncParkingWatch();
+            if(changed||tab==0)render();
+        });
+    };
     private long parkingCheckRevision;
     private ScenicApiClient parkingCheckClient;
     private Future<?> parkingCheckJob;
     private boolean plannerMode,legacyRecords;
-    private String musicTaste="balanced";
     private boolean destinationPlanning,destinationSearching,destinationWaitingForFix,navigationDemoSaved,resumeDestinationAfterPermission;
     private int detourMinutes=30,navigationDemoStep;
     private String destinationTheme="coast",destinationMessage="";
@@ -115,7 +119,7 @@ public final class MainActivity extends Activity implements LocationListener {
 
 
     // Photo browsing keeps its own safety watcher active so controls recover when parked again.
-    private final Runnable uiTicker=new Runnable(){public void run(){if(!resumed)return;refreshExpiredLocation();updateStatus();enforceVideoSafety();refreshMusicSafety();if(captureDemo!=null)captureDemo.refreshSafety();if(sampleJourney!=null)sampleJourney.checkSafety();if(isDistractingBlocked()){if(recapExperience!=null)recapExperience.pause();if(discoveryView!=null)discoveryView.pause();}handler.postDelayed(this,1000);}};
+    private final Runnable uiTicker=new Runnable(){public void run(){if(!resumed)return;refreshExpiredLocation();updateStatus();enforceVideoSafety();if(captureDemo!=null)captureDemo.refreshSafety();if(sampleJourney!=null)sampleJourney.checkSafety();if(isDistractingBlocked()){if(recapExperience!=null)recapExperience.pause();if(discoveryView!=null)discoveryView.pause();}handler.postDelayed(this,1000);}};
     private final Runnable simulator=new Runnable(){public void run(){
         if(!resumed||!running||!demo)return;
         if(spotIndex<course.spots.length-1){spotIndex++;notice=course.spots[spotIndex].title+"에 도착한 것으로 가정합니다. 실제 위치와 무관한 데모입니다.";render();handler.postDelayed(this,14000);}
@@ -131,11 +135,11 @@ public final class MainActivity extends Activity implements LocationListener {
         initDestinationExperience();initExperiences();render();
     }
     @Override protected void onResume(){super.onResume();resumed=true;getSharedPreferences("parking_watch",0).registerOnSharedPreferenceChangeListener(parkingWatchListener);syncParkingWatch();handler.post(uiTicker);vehicle.start();if(parkingPermissionPending&&parkingPermissionResolved)resumeParkingPermissionNavigation();if(!demo||mapGpsEnabled)startGps();if(running&&demoDriving)handler.postDelayed(plannerMode?simulator:destinationDemoTicker,plannerMode?14000:7000);render();if(resumeDestinationAfterPermission&&checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED){resumeDestinationAfterPermission=false;requestDestinationRoutes();}}
-    @Override protected void onPause(){super.onPause();resumed=false;getSharedPreferences("parking_watch",0).unregisterOnSharedPreferenceChangeListener(parkingWatchListener);if(nativeNavigation!=null)nativeNavigation.pause();pauseExperiences();closeMusicWeb();cancelDestinationWork();if(captureDemo!=null)captureDemo.dismiss();handler.removeCallbacks(destinationDemoTicker);invalidateApi(false,false);handler.removeCallbacks(uiTicker);handler.removeCallbacks(simulator);player.pause();stopGps();vehicle.stop();if(kakaoMap!=null)kakaoMap.onPause();dismissActionDialog();if(videoDialog!=null)videoDialog.dismiss();updateStatus();}
-    @Override protected void onDestroy(){if(nativeNavigation!=null)nativeNavigation.destroy();pauseExperiences();if(discoveryView!=null)discoveryView.destroy();if(destinationPhotoView!=null)destinationPhotoView.destroy();if(recapExperience!=null)recapExperience.destroy();if(nearbyStops!=null)nearbyStops.destroy();closeMusicWeb();cancelDestinationWork();if(captureDemo!=null)captureDemo.dismiss();apiExecutor.shutdownNow();handler.removeCallbacksAndMessages(null);player.release();vehicle.stop();if(kakaoMap!=null)kakaoMap.release();super.onDestroy();}
+    @Override protected void onPause(){super.onPause();resumed=false;getSharedPreferences("parking_watch",0).unregisterOnSharedPreferenceChangeListener(parkingWatchListener);if(nativeNavigation!=null)nativeNavigation.pause();pauseExperiences();cancelDestinationWork();if(captureDemo!=null)captureDemo.dismiss();handler.removeCallbacks(destinationDemoTicker);invalidateApi(false,false);handler.removeCallbacks(uiTicker);handler.removeCallbacks(simulator);player.pause();stopGps();vehicle.stop();if(kakaoMap!=null)kakaoMap.onPause();dismissActionDialog();if(videoDialog!=null)videoDialog.dismiss();updateStatus();}
+    @Override protected void onDestroy(){if(nativeNavigation!=null)nativeNavigation.destroy();pauseExperiences();if(discoveryView!=null)discoveryView.destroy();if(destinationPhotoView!=null)destinationPhotoView.destroy();if(recapExperience!=null)recapExperience.destroy();if(nearbyStops!=null)nearbyStops.destroy();cancelDestinationWork();if(captureDemo!=null)captureDemo.dismiss();apiExecutor.shutdownNow();handler.removeCallbacksAndMessages(null);player.release();vehicle.stop();if(kakaoMap!=null)kakaoMap.release();super.onDestroy();}
     @Override public void onConfigurationChanged(Configuration config){super.onConfigurationChanged(config);pauseExperiences();if(captureDemo!=null)captureDemo.dismiss();render();if(actionDialog!=null)styleDialog(actionDialog);}
     private int d(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
-    private GradientDrawable bg(int color,int stroke){GradientDrawable b=new GradientDrawable();b.setColor(color);b.setCornerRadius(d(16));if(stroke!=0)b.setStroke(d(1),stroke);return b;}
+    private GradientDrawable bg(int color,int stroke){GradientDrawable b=new GradientDrawable();b.setColor(color);b.setCornerRadius(d(ScenicDesign.CARD_RADIUS));if(stroke!=0)b.setStroke(d(1),stroke);return b;}
     private TextView txt(String s,int sp,int color){TextView t=new TextView(this);t.setTypeface(ScenicTypography.font(this,400));t.setText(s);t.setTextSize(Math.max(14,sp)+fontBoost);t.setTextColor(color);t.setFontFeatureSettings("kern");t.setIncludeFontPadding(false);t.setLineSpacing(d(3),1);return t;}
     private TextView title(String s,int sp){TextView t=txt(s,sp,INK);t.setTypeface(ScenicTypography.font(this,600));return t;}
     private LinearLayout col(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);return l;}
@@ -146,12 +150,12 @@ public final class MainActivity extends Activity implements LocationListener {
     private LinearLayout.LayoutParams lp(int w,int h){return new LinearLayout.LayoutParams(w<0?w:d(w),h<0?h:d(h));}
     private TextView button(String label,boolean primary,Runnable action){
         TextView b=txt(label,17,primary?PANEL:ACCENT);b.setGravity(Gravity.CENTER);b.setTypeface(ScenicTypography.font(this,600));
-        b.setPadding(d(16),d(12),d(16),d(12));b.setMinHeight(d(56));
-        GradientDrawable surface=bg(primary?ACCENT:PANEL,primary?0:LINE);surface.setCornerRadius(d(12));b.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656),surface,null));
+        b.setPadding(d(16),d(12),d(16),d(12));b.setMinHeight(d(ScenicDesign.TOUCH_HEIGHT));
+        GradientDrawable surface=bg(primary?ACCENT:PANEL,primary?0:LINE);surface.setCornerRadius(d(ScenicDesign.CONTROL_RADIUS));b.setBackground(new RippleDrawable(ColorStateList.valueOf(primary?0x28ffffff:ScenicDesign.RIPPLE),surface,null));
         b.setFocusable(true);b.setClickable(true);b.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View host,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(host,info);info.setClassName(Button.class.getName());}});b.setOnClickListener(v->action.run());return b;
     }
     private TextView chip(String label,boolean selected,Runnable action){
-        TextView b=button(label,false,action);b.setTextSize(16+fontBoost);b.setPadding(d(12),d(10),d(12),d(10));b.setMinHeight(d(56));b.setSelected(selected);b.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656),bg(selected?SOFT:PANEL,selected?ACCENT:LINE),null));b.setTypeface(ScenicTypography.font(this,selected?600:400));return b;
+        TextView b=button(label,false,action);b.setTextSize(16+fontBoost);b.setPadding(d(12),d(10),d(12),d(10));b.setMinHeight(d(ScenicDesign.TOUCH_HEIGHT));b.setSelected(selected);b.setBackground(new RippleDrawable(ColorStateList.valueOf(ScenicDesign.RIPPLE),bg(selected?SOFT:PANEL,selected?ACCENT:LINE),null));b.setTypeface(ScenicTypography.font(this,selected?600:400));return b;
     }
     private void addScrollableColumn(LinearLayout column,float weight){
         if(wide){ScrollView sc=new ScrollView(this);sc.setFillViewport(true);sc.setVerticalScrollBarEnabled(false);sc.addView(column,new ScrollView.LayoutParams(-1,-2));content.addView(sc,new LinearLayout.LayoutParams(0,-1,weight));}
@@ -175,7 +179,7 @@ public final class MainActivity extends Activity implements LocationListener {
         parent.addView(title("보고 싶은 풍경",16));gap(parent,12);String[] ids={"all","lake","sea","night"},names={"모든 풍경","호수 · 숲","바다","도시 · 문화"};
         for(int start=0;start<ids.length;start+=2){LinearLayout choices=row();for(int i=start;i<start+2;i++){if(i>start)space(choices,8);final String id=ids[i];choices.addView(chip(names[i],preference.equals(id),()->{if(!canChangeRoute())return;preference=id;if(live)cancelLiveRequest("풍경 조건이 바뀌었어요. 새 코스를 만들어 주세요.",true);else refreshLocalRecommendations(true);render();}),new LinearLayout.LayoutParams(0,-2,1));}parent.addView(choices);if(start==0)gap(parent,8);}
     }
-    private void addMetric(LinearLayout metrics,String value,String label){LinearLayout item=col();item.setPadding(0,0,d(12),0);item.addView(title(value,26));gap(item,6);item.addView(txt(label,14,MUTED));metrics.addView(item,new LinearLayout.LayoutParams(0,-2,1));}
+    private void addMetric(LinearLayout metrics,String value,String label){LinearLayout item=col();item.setPadding(0,0,d(12),0);item.addView(title(value,wide?28:22));gap(item,6);item.addView(txt(label,14,MUTED));metrics.addView(item,new LinearLayout.LayoutParams(0,-2,1));}
     private void addMainColumn(LinearLayout column,float weight){if(wide)content.addView(column,new LinearLayout.LayoutParams(0,-1,weight));else content.addView(column,lp(-1,-2));}
     private void readViewport(){
         Configuration config=getResources().getConfiguration();windowWidthDp=config.screenWidthDp;windowHeightDp=config.screenHeightDp;
@@ -193,7 +197,7 @@ public final class MainActivity extends Activity implements LocationListener {
         if(dialog.getWindow()!=null)dialog.getWindow().setLayout(d(Math.min(680,windowWidthDp-40)),-2);
         TextView message=dialog.findViewById(android.R.id.message);if(message!=null){message.setTypeface(ScenicTypography.font(this,400));message.setTextSize(16+fontBoost);message.setTextColor(INK);}
         int titleId=getResources().getIdentifier("alertTitle","id","android");TextView heading=dialog.findViewById(titleId);if(heading!=null){heading.setTypeface(ScenicTypography.font(this,600));heading.setTextSize(21+fontBoost);heading.setTextColor(INK);}
-        for(int which:new int[]{AlertDialog.BUTTON_POSITIVE,AlertDialog.BUTTON_NEGATIVE,AlertDialog.BUTTON_NEUTRAL}){Button b=dialog.getButton(which);if(b!=null){b.setTypeface(ScenicTypography.font(this,600));b.setTextSize(16+fontBoost);b.setMinHeight(d(56));}}
+        for(int which:new int[]{AlertDialog.BUTTON_POSITIVE,AlertDialog.BUTTON_NEGATIVE,AlertDialog.BUTTON_NEUTRAL}){Button b=dialog.getButton(which);if(b!=null){b.setTypeface(ScenicTypography.font(this,600));b.setTextSize(16+fontBoost);b.setMinHeight(d(ScenicDesign.TOUCH_HEIGHT));}}
     }
     private void showSettings(){
         actionDialogForConnection=true;
@@ -203,41 +207,48 @@ public final class MainActivity extends Activity implements LocationListener {
     private void pauseExperiences(){if(destinationPhotoView!=null)destinationPhotoView.pause();if(discoveryView!=null)discoveryView.pause();if(recapExperience!=null)recapExperience.pause();if(nearbyStops!=null)nearbyStops.pause();if(sampleJourney!=null)sampleJourney.pause();}
     private void switchExperienceTab(int selectedTab){
         if(isDistractingBlocked()&&selectedTab!=0){toast("정차 후 이용해 주세요.");return;}
-        if(selectedTab!=tab){pauseExperiences();if(tab==1)cancelMusicRecommendation();if(selectedTab!=0){cancelDestinationWork();if(liveWaitingForFix||liveRequestActive)cancelLiveRequest("화면을 바꾸어 코스 생성을 취소했습니다.",false);}}
+        if(selectedTab!=tab){pauseExperiences();if(selectedTab!=0){cancelDestinationWork();if(liveWaitingForFix||liveRequestActive)cancelLiveRequest("화면을 바꾸어 코스 생성을 취소했습니다.",false);}}
         tab=selectedTab;render();
     }
     private LinearLayout navigation(){
-        boolean stacked=!wide&&(windowWidthDp<640||getResources().getConfiguration().fontScale>1.3f);
-        LinearLayout navigation=stacked?col():row();navigation.setPadding(d(6),d(6),d(6),d(6));navigation.setBackground(bg(PANEL,LINE));String[] tabs={"발견","경로","음악","리캡","맛집·주차","기록"};int[] ids={3,0,1,4,5,2};
+        float fontScale=getResources().getConfiguration().fontScale;
+        boolean stacked=windowWidthDp<640||windowWidthDp/Math.max(1f,fontScale)<700;
+        LinearLayout navigation=stacked?col():row();navigation.setPadding(0,0,0,0);String[] tabs={"발견","경로","리캡","맛집·주차","기록"};int[] ids={3,0,4,5,2};
         LinearLayout tabRow=stacked?row():navigation;if(stacked)navigation.addView(tabRow,lp(-1,-2));
-        for(int i=0;i<tabs.length;i++){final int selectedTab=ids[i];TextView item=button(tabs[i],false,()->switchExperienceTab(selectedTab));
-            item.setTextSize((wide?18:16)+fontBoost);item.setPadding(d(8),d(12),d(8),d(12));item.setTextColor(tab==selectedTab?PANEL:MUTED);item.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656),bg(tab==selectedTab?ACCENT:Color.TRANSPARENT,0),null));item.setSelected(tab==selectedTab);item.setContentDescription(tabs[i]+(tab==selectedTab?", 선택됨":""));
-            if(stacked&&i==3){gap(navigation,4);tabRow=row();navigation.addView(tabRow,lp(-1,-2));}
-            tabRow.addView(item,new LinearLayout.LayoutParams(0,-2,1));if(i<tabs.length-1&&(!stacked||i!=2))space(tabRow,4);
+        for(int i=0;i<tabs.length;i++){final int selectedTab=ids[i];boolean selected=tab==selectedTab;TextView item=button(tabs[i],false,()->switchExperienceTab(selectedTab));
+            item.setTextSize((wide?18:16)+fontBoost);
+            if(windowWidthDp>=1120&&fontScale<=1.3f){
+                ScenicGlyph icon=new ScenicGlyph(this,selectedTab,selected?PANEL:INK);icon.setBounds(0,0,d(22),d(22));
+                SpannableString label=new SpannableString("\uFFFC  "+tabs[i]);label.setSpan(new ImageSpan(icon,Build.VERSION.SDK_INT>=29?ImageSpan.ALIGN_CENTER:ImageSpan.ALIGN_BASELINE),0,1,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);item.setText(label);
+            }
+            item.setPadding(d(12),d(12),d(12),d(12));item.setTextColor(selected?PANEL:INK);
+            GradientDrawable surface=bg(selected?ACCENT:PANEL,0);surface.setCornerRadius(d(ScenicDesign.CONTROL_RADIUS));surface.setStroke(d(2),selected?ACCENT:ScenicDesign.NAV_BORDER);
+            item.setBackground(new RippleDrawable(ColorStateList.valueOf(selected?0x28ffffff:ScenicDesign.RIPPLE),surface,null));item.setSelected(selected);item.setContentDescription(tabs[i]+(selected?", 선택됨":""));
+            if(stacked&&i==3){gap(navigation,8);tabRow=row();navigation.addView(tabRow,lp(-1,-2));}
+            tabRow.addView(item,new LinearLayout.LayoutParams(0,-2,1));if(i<tabs.length-1&&(!stacked||i!=2))space(tabRow,8);
         }return navigation;
     }
     private void render(){
         readViewport();
         if(kakaoMap!=null){if(kakaoMap.getParent() instanceof ViewGroup)((ViewGroup)kakaoMap.getParent()).removeView(kakaoMap);kakaoMap.onPause();}
-        root=col();int side=wide?28:20;root.setPadding(d(side),d(12),d(side),d(12));root.setBackgroundColor(BG);setContentView(root);
+        root=col();int side=wide?32:16;root.setPadding(d(side),d(16),d(side),d(16));root.setBackgroundColor(BG);setContentView(root);
         // Pleos overlays system bars on API 34 too. Fit the real safe area once, on every API 30+ device.
-        if(Build.VERSION.SDK_INT>=30){root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets bars=insets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());android.graphics.Insets ime=insets.getInsets(WindowInsets.Type.ime());v.setPadding(d(side)+bars.left,d(12)+bars.top,d(side)+bars.right,d(12)+Math.max(bars.bottom,ime.bottom));return insets;});root.requestApplyInsets();}
-        LinearLayout header=row();TextView brand=title("SCENIC",26);brand.setLetterSpacing(.05f);header.addView(brand,wide?lp(160,-2):new LinearLayout.LayoutParams(0,-2,1));
-        if(wide){header.addView(navigation(),new LinearLayout.LayoutParams(0,-2,1));space(header,20);}
-        TextView settings=button("설정",false,this::showSettings);settings.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656),bg(Color.TRANSPARENT,0),null));header.addView(settings,lp(72,-2));root.addView(header,lp(-1,-2));gap(root,wide?24:12);
-        if(!wide){root.addView(navigation(),lp(-1,-2));gap(root,16);}
+        if(Build.VERSION.SDK_INT>=30){root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets bars=insets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());android.graphics.Insets ime=insets.getInsets(WindowInsets.Type.ime());v.setPadding(d(side)+bars.left,d(16)+bars.top,d(side)+bars.right,d(16)+Math.max(bars.bottom,ime.bottom));return insets;});root.requestApplyInsets();}
+        boolean inlineNavigation=wide&&windowWidthDp>=1120&&getResources().getConfiguration().fontScale<=1.3f;
+        LinearLayout header=row();TextView brand=title("SCENIC",24);brand.setTextColor(ACCENT);brand.setLetterSpacing(.12f);header.addView(brand,inlineNavigation?lp(160,-2):new LinearLayout.LayoutParams(0,-2,1));
+        if(inlineNavigation){header.addView(navigation(),new LinearLayout.LayoutParams(0,-2,1));space(header,20);}
+        TextView settings=button("설정",false,this::showSettings);GradientDrawable settingsSurface=bg(PANEL,0);settingsSurface.setCornerRadius(d(ScenicDesign.CONTROL_RADIUS));settingsSurface.setStroke(d(2),ScenicDesign.NAV_BORDER);settings.setBackground(new RippleDrawable(ColorStateList.valueOf(ScenicDesign.RIPPLE),settingsSurface,null));header.addView(settings,lp(72,-2));root.addView(header,lp(-1,-2));gap(root,16);divider(root);gap(root,wide?24:16);
+        if(!inlineNavigation){root.addView(navigation(),lp(-1,-2));gap(root,16);}
         content=wide?row():col();content.setGravity(Gravity.TOP);
         if(wide)root.addView(content,new LinearLayout.LayoutParams(-1,0,1));
         else{ScrollView body=new ScrollView(this);body.setFillViewport(true);body.setVerticalScrollBarEnabled(false);body.addView(content,new ScrollView.LayoutParams(-1,-2));root.addView(body,new LinearLayout.LayoutParams(-1,0,1));}
-        map=null;soundStatus=null;progressView=null;detailView=null;apiStatusView=null;noticeView=null;
-        if(isCarUiBlocked())renderDrivingSafety();else if(tab==0)renderRoutes();else if(tab==1)renderSound();else if(tab==3)addExperienceView(discoveryView.createView(wide));else if(tab==4)addExperienceView(recapExperience.createView(wide));else if(tab==5)addExperienceView(nearbyStops.createView(wide));else renderScenicRecords();
+        map=null;progressView=null;detailView=null;apiStatusView=null;noticeView=null;
+        if(isCarUiBlocked())renderDrivingSafety();else if(tab==0)renderRoutes();else if(tab==3)addExperienceView(discoveryView.createView(wide));else if(tab==4)addExperienceView(recapExperience.createView(wide));else if(tab==5)addExperienceView(nearbyStops.createView(wide));else renderScenicRecords();
         gap(root,10);statusView=txt("",14,MUTED);statusView.setPadding(0,d(6),0,d(6));root.addView(statusView,lp(-1,-2));updateStatus();
-        root.post(()->{if(musicWebDialog!=null)musicWebDialog.relayout();});
     }
     private void renderRoutes(){if(destinationPhotoBrowsing&&!plannerMode){renderDestinationPhotos();return;}if(plannerMode){if(preparedBrowse)renderPreparedRoutes();else renderLiveRoutes();}else renderDestinationRoutes();}
     private void addExperienceView(View view){content.addView(view,wide?new LinearLayout.LayoutParams(-1,-1):lp(-1,windowHeightDp-190));}
     private void initExperiences(){
-        musicTaste=getPreferences(0).getString("music_taste","balanced");
         plannerRoundTrip=getPreferences(0).getBoolean("planner_return",true);plannerStayMinutes=getPreferences(0).getInt("planner_stay",0);if(plannerStayMinutes!=0&&plannerStayMinutes!=15&&plannerStayMinutes!=30)plannerStayMinutes=0;
         nativeNavigation=new PleosNavigationBridge(this,new PleosNavigationBridge.Host(){public boolean canInteract(){return resumed&&!isDrivingInteractionBlocked();}public void onNavigationStatus(String message){navigationStatus=message;if(resumed&&!isDestroyed())render();}public void onNavigationRequested(DestinationPlace target,List<DestinationPlace> points){if(points.isEmpty()&&sameJourneyPlace(target,journey.parking())&&!ParkingWatchService.start(MainActivity.this,apiBaseUrl,journey,nearbyStops.excludedParkingIds())){navigationStatus="주차 안내를 요청했어요. 자동 빈자리 확인은 시작하지 못했으니 주차 목록을 다시 확인해 주세요.";}}});
         destinationPhotoView=new DestinationPhotoView(this,new DestinationPhotoView.Host(){
@@ -283,7 +294,7 @@ public final class MainActivity extends Activity implements LocationListener {
             public boolean canInteract(){return resumed&&!isDrivingInteractionBlocked();}
             public void capture(String segment){captureDemo.saveDemoCapture("sample_busancoast","부산 해안 자동 기록 시연","청사포",segment);}
             public void sharePreview(boolean enabled){captureDemo.setSharingEnabled(enabled);}
-            public void soundtrack(boolean play){if(play){closeMusicWeb();player.playScene(sceneTrack());}else player.pause();}
+            public void soundtrack(boolean play){if(play){player.playScene(sceneTrack());}else player.pause();}
             public void openRecap(){switchExperienceTab(4);}
         });
     }
@@ -304,9 +315,11 @@ public final class MainActivity extends Activity implements LocationListener {
         pauseExperiences();destinationPhotoBrowsing=false;regionPhotoMode=false;forgetScenicPhoto();plannerMode=false;clearDestinationPlan("");destinationPlace=parking;destinationTheme="all";detourMinutes=0;parkingCheckRedirects=redirects;tab=0;render();requestDestinationRoutes(true);
     }
     private void saveJourney(){ParkingWatchService.stopIfJourneyChanged(this,journey);getPreferences(0).edit().putString("journey_v2",journey.serialize()).putBoolean("region_photo_flow",regionPhotoMode).apply();}
-    private void syncParkingWatch(){
-        if(journey==null)return;DestinationPlace replacement=ParkingWatchService.replacement(this,journey);
-        if(replacement!=null){journey.visitParking(replacement,journey.restaurant());destinationPlace=replacement;regionPhotoMode=false;destinationPhotoBrowsing=false;forgetScenicPhoto();plannerMode=false;detourMinutes=0;clearDestinationPlan("");saveJourney();destinationMessage="만차로 확인되어 "+replacement.name+"으로 순정 내비 안내를 변경했어요. 경로 확인으로 지도를 갱신할 수 있어요.";}
+    private boolean syncParkingWatch(){
+        if(journey==null)return false;DestinationPlace replacement=ParkingWatchService.replacement(this,journey);
+        if(replacement==null)return false;
+        journey.visitParking(replacement,journey.restaurant());destinationPlace=replacement;regionPhotoMode=false;destinationPhotoBrowsing=false;forgetScenicPhoto();plannerMode=false;detourMinutes=0;clearDestinationPlan("");saveJourney();destinationMessage="수락한 제안에 따라 "+replacement.name+"으로 순정 내비 안내를 변경했어요. 경로 확인으로 지도를 갱신할 수 있어요.";
+        return true;
     }
     private void openNearbyDestination(DestinationPlace place,DestinationPlace restaurant,boolean parking){
         if(!canChangeRoute())return;if(parking)journey.visitParking(place,restaurant);else journey.visitRestaurant(place);saveJourney();openJourneyTarget(place,"all",0);
@@ -425,9 +438,9 @@ public final class MainActivity extends Activity implements LocationListener {
         String status=ParkingWatchService.status(this);if(!status.isEmpty()&&!status.equals(proposal)){gap(panel,6);panel.addView(txt(status,14,INK));}
         if(ParkingWatchService.active(this)){gap(panel,8);panel.addView(button("자동 주차 확인 중단",false,()->{ParkingWatchService.stop(this);navigationStatus="자동 주차 확인을 중단했어요. 순정 내비 안내는 유지됩니다.";render();}),lp(-1,-2));}
     }
-    private String sceneTrack(){if("energetic".equals(musicTaste))return "sea";if("chill".equals(musicTaste)||"instrumental".equals(musicTaste))return "night";return "coast".equals(destinationTheme)?"sea":"city".equals(destinationTheme)?"night":"lake";}
+    private String sceneTrack(){return "coast".equals(destinationTheme)?"sea":"city".equals(destinationTheme)?"night":"lake";}
     private void renderLiveRoutes(){
-        LinearLayout left=section();addScrollableColumn(left,.35f);panelSpace();
+        LinearLayout left=card();addScrollableColumn(left,.35f);panelSpace();
         left.addView(title("AI 코스 찾기",26));left.addView(textAction("목적지로 경로 비교  →",()->{if(!canChangeRoute())return;plannerMode=false;cancelLiveRequest("",false);clearDestinationPlan("");if(journey.target()!=null)destinationPlace=journey.target();render();}),lp(-1,-2));gap(left,16);
         addTimeChoices(left);gap(left,20);addPlannerTripChoices(left);gap(left,20);addSceneryChoices(left,true);gap(left,24);
         boolean busy=liveWaitingForFix||apiRequests.isPending(ApiRequestGate.AI);
@@ -461,7 +474,7 @@ public final class MainActivity extends Activity implements LocationListener {
         summaryRow(panel,"장소별 체류",plannerStayMinutes==0?"체류 없이 경유":plannerStayMinutes+"분");gap(panel,4);panel.addView(txt(plannerRoundTrip?"출발지 복귀 시간 포함":"마지막 장소에서 종료 · 복귀 제외",14,MUTED));
     }
     private void renderPreparedRoutes(){
-        LinearLayout left=section();addScrollableColumn(left,.35f);panelSpace();
+        LinearLayout left=card();addScrollableColumn(left,.35f);panelSpace();
         left.addView(title("전국 코스",26));gap(left,24);
         addTimeChoices(left);gap(left,16);addSceneryChoices(left,false);gap(left,24);
         left.addView(button("내 위치로 추천",true,this::recommendFromLocation),lp(-1,-2));gap(left,8);
@@ -515,7 +528,7 @@ public final class MainActivity extends Activity implements LocationListener {
         safe.addView(title("주행 중 조작이 제한됩니다",28));gap(safe,15);
         safe.addView(txt("차량 상태가 확인되면 경로와 풍경 기록을 살펴볼 수 있어요.",15,MUTED));gap(safe,18);
         if(hasBudgetCourse()||running){safe.addView(title(plannerMode?course.name:destinationRouteName(),23));gap(safe,7);safe.addView(txt(plannerMode?"선택한 드라이브 여정":"도착지 · "+destinationLabel(),17,INK));}else safe.addView(txt("정차 후 목적지를 선택해 주세요.",17,INK));gap(safe,24);
-        LinearLayout actions=row();actions.addView(txt("음악은 차량 미디어 버튼으로 조작하세요.",16,MUTED),new LinearLayout.LayoutParams(0,-2,1));space(actions,14);
+        LinearLayout actions=row();actions.addView(txt("경로 안내는 순정 내비에서 확인하세요.",16,MUTED),new LinearLayout.LayoutParams(0,-2,1));space(actions,14);
         if(running)actions.addView(button("시연 종료",false,()->stopDestinationDemo("안내 시연을 종료했어요.")),new LinearLayout.LayoutParams(0,-2,1));else actions.addView(button("차량 연결 확인",false,this::showConnections),new LinearLayout.LayoutParams(0,-2,1));safe.addView(actions,lp(-1,-2));
         gap(safe,20);safe.addView(txt("정차 상태와 필요한 권한이 확인되면 전체 화면으로 돌아갑니다.",12,MUTED));
     }
@@ -528,112 +541,6 @@ public final class MainActivity extends Activity implements LocationListener {
         invalidateApi(false,!isLiveSelection());liveWaitingForFix=false;running=true;demoDriving=demo;spotIndex=0;
         notice=demo?"14초마다 명소를 이동하는 시뮬레이터입니다. 실제 차속·GPS와 분리됩니다.":"GPS로 명소 접근을 감지합니다. 실제 길 안내는 제공하지 않습니다.";
         if(demo)handler.postDelayed(simulator,14000);else startGps();render();enforceVideoSafety();
-    }
-    private boolean hasCurrentMusicCourse(){return plannerMode?isLiveSelection()||(preparedBrowse&&localResult!=null&&localResult.find(course.id)!=null):chosenDestinationRoute!=null;}
-    private MusicContext currentMusicContext(){
-        boolean selected=hasCurrentMusicCourse();
-        String title=selected?(plannerMode?course.name:destinationRouteName()):"목적지 선택 전 · 일반 드라이브";
-        // Course titles may contain whitespace accepted by the itinerary response.
-        title=title==null?"":title.replaceAll("[\\p{Cc}\\p{Z}\\s]+"," ").trim();
-        if(title.isEmpty())title="일반 드라이브";
-        if(title.length()>120)title=title.substring(0,120).trim();
-        return new MusicContext(title,selected?course.scene:destinationTheme,selected?course.minutes:detourMinutes+30,musicTaste);
-    }
-    private String musicContextKey(MusicContext context){
-        return apiBaseUrl+"|"+demo+"|"+preparedBrowse+"|"+preference+"|"+budget+"|"+(hasCurrentMusicCourse()?course.id:"general")+"|"+context.key();
-    }
-    private String musicThemeLabel(String theme){
-        if("coast".equals(theme))return "바다 · 해안";
-        if("city".equals(theme))return "도시 풍경";
-        if("lake".equals(theme)||"water".equals(theme))return "강 · 호수";
-        if("forest".equals(theme))return "숲 · 나무길";
-        if("mountain".equals(theme))return "산 · 전망";
-        if("countryside".equals(theme))return "들판 · 농촌";
-        return "모든 풍경";
-    }
-    private void cancelMusicRecommendation(){
-        if(musicClient!=null){musicClient.cancel();musicClient=null;}
-        if(musicJob!=null){musicJob.cancel(true);musicJob=null;}
-        musicState.cancel();
-    }
-    private void requestMusicRecommendation(MusicContext context,String contextKey){
-        if(!resumed||tab!=1||isDistractingBlocked())return;
-        final long token=musicState.begin();if(token==0)return;
-        musicMessage="AI가 현재 드라이브에 맞는 플레이리스트를 고르고 있어요…";
-        final ScenicApiClient client;
-        try{client=new ScenicApiClient(apiBaseUrl);}catch(IllegalArgumentException e){
-            musicMessage="API 서버 주소를 확인한 뒤 다시 시도해 주세요.";
-            musicState.complete(token,contextKey,null,musicMessage);return;
-        }
-        musicClient=client;
-        musicJob=apiExecutor.submit(()->{
-            MusicPlaylist result=null;String failure=null;
-            try{result=MusicPlaylist.parse(client.music(context));}
-            catch(ScenicApiClient.ApiException e){failure=e.getMessage();}
-            catch(Exception e){failure="플레이리스트 응답을 확인하지 못했어요. 다시 추천해 주세요.";}
-            final MusicPlaylist chosen=result;final String error=failure;
-            handler.post(()->{
-                if(!resumed||isDestroyed()||isFinishing()||tab!=1||isDistractingBlocked())return;
-                if(!contextKey.equals(musicContextKey(currentMusicContext())))return;
-                if(!musicState.complete(token,contextKey,chosen,error))return;
-                musicJob=null;musicClient=null;
-                musicMessage=error==null?"추천이 준비됐어요. ‘노래 재생’을 누르면 선택한 플레이리스트가 열립니다.":error;
-                // Receiving an AI result never starts an external activity or media.
-                render();
-            });
-        });
-    }
-    private void renderSound(){
-        MusicContext context=currentMusicContext();String key=musicContextKey(context);
-        if(musicState.select(key)){cancelMusicRecommendation();musicMessage="";}
-        boolean blocked=isDistractingBlocked();musicWasBlocked=blocked;
-        if(blocked)cancelMusicRecommendation();else requestMusicRecommendation(context,key);
-        MusicPlaylist playlist=musicState.playlist();
-        LinearLayout left=col();addScrollableColumn(left,.60f);left.addView(title("풍경에 어울리는 음악",28));gap(left,10);left.addView(txt("지금 가는 길과 나의 취향을 함께 담았어요.",17,MUTED));gap(left,24);LinearLayout selected=card();left.addView(selected,lp(-1,-2));selected.addView(txt("AI 추천 · YouTube Music",15,ACCENT));gap(selected,24);
-        if(playlist!=null){selected.addView(title(playlist.title,32));gap(selected,12);selected.addView(txt(playlist.creator,17,MUTED));gap(selected,28);LinearLayout reason=col();reason.setPadding(d(20),d(20),d(20),d(20));reason.setBackground(bg(SOFT,0));reason.addView(title("이 길에 추천하는 이유",17));gap(reason,12);reason.addView(txt(playlist.reason,18,INK));selected.addView(reason,lp(-1,-2));gap(selected,28);}
-        else if(blocked){selected.addView(title("정차 후 추천할 수 있습니다",24));gap(selected,12);selected.addView(txt("주행 중에는 차량 미디어 버튼을 사용해 주세요.",16,MUTED));gap(selected,24);}
-        else if(musicState.isPending()){selected.addView(title("플레이리스트 추천 중",24));gap(selected,12);gap(selected,8);ProgressBar progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);selected.addView(progress,lp(-1,4));gap(selected,24);}
-        else{selected.addView(title("추천을 완료하지 못했습니다",24));gap(selected,12);selected.addView(txt(musicState.error()==null?"다시 시도해 주세요.":musicState.error(),16,MUTED));gap(selected,24);selected.addView(button("음악 추천 다시 시도",true,()->{if(!resumed||isDistractingBlocked())return;cancelMusicRecommendation();musicState.retry();render();}),lp(-1,-2));gap(selected,12);}
-        LinearLayout playback=wide?row():col();TextView play=button("노래 재생",true,this::openChosenPlaylist);play.setEnabled(playlist!=null&&!blocked);play.setAlpha(play.isEnabled()?1:.45f);playback.addView(play,wide?new LinearLayout.LayoutParams(0,-2,1.2f):lp(-1,-2));
-        if(wide)space(playback,12);else gap(playback,12);TextView external=button("외부 앱에서 열기  ↗",false,this::openChosenPlaylistExternally);external.setEnabled(playlist!=null&&!blocked);external.setAlpha(external.isEnabled()?1:.45f);playback.addView(external,wide?new LinearLayout.LayoutParams(0,-2,1):lp(-1,-2));selected.addView(playback,lp(-1,-2));gap(selected,14);selected.addView(txt("앱 안에서 열고, 작은 음악 창으로 경로와 함께 볼 수 있어요.",15,MUTED));
-        if(!musicMessage.isEmpty()&&(playlist!=null||blocked||musicState.isPending())){gap(selected,12);soundStatus=txt(musicMessage,15,MUTED);soundStatus.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);selected.addView(soundStatus);}panelSpace();
-        LinearLayout right=col();addScrollableColumn(right,.40f);LinearLayout preferences=card();right.addView(preferences,lp(-1,-2));preferences.addView(title("나의 음악 취향",22));gap(preferences,10);preferences.addView(txt("취향을 고르면 추천이 바뀌어요.",16,MUTED));gap(preferences,20);
-        String[] tasteIds={"balanced","acoustic","chill","energetic","instrumental"},tasteNames={"분위기에 맞게","어쿠스틱","차분하게","경쾌하게","가사 없이"};
-        for(int start=0;start<tasteIds.length;start+=2){LinearLayout choices=row();for(int i=start;i<Math.min(start+2,tasteIds.length);i++){final String taste=tasteIds[i];if(i>start)space(choices,10);choices.addView(chip(tasteNames[i],musicTaste.equals(taste),()->{if(isDistractingBlocked())return;musicTaste=taste;getPreferences(0).edit().putString("music_taste",taste).apply();cancelMusicRecommendation();render();}),new LinearLayout.LayoutParams(0,-2,1));}preferences.addView(choices,lp(-1,-2));if(start+2<tasteIds.length)gap(preferences,10);}
-        gap(preferences,24);divider(preferences);gap(preferences,20);preferences.addView(title("지금 가는 길",17));gap(preferences,10);preferences.addView(txt(hasCurrentMusicCourse()?context.title:"코스를 고르면 풍경도 함께 반영해요.",18,INK));gap(preferences,8);
-        String contextLabel=hasCurrentMusicCourse()?(plannerMode?(liveOrigin==null?"준비된 드라이브 코스":liveOrigin.label()):(journey.usesGps()?"현재 위치에서 목적지까지":originLabel())):"선택한 조건";
-        preferences.addView(txt(contextLabel,14,MUTED));gap(preferences,16);summaryRow(preferences,"분위기",chosenDestinationRoute!=null&&"fast".equals(chosenDestinationRoute.id)?"일반 드라이브":musicThemeLabel(context.theme));summaryRow(preferences,"시간",context.durationMinutes+"분");gap(right,20);
-        LinearLayout ambient=card();right.addView(ambient,lp(-1,-2));ambient.addView(title("기록 시연용 음악",20));gap(ambient,12);
-        Switch autoMusic=new Switch(this);autoMusic.setText("시연을 시작하면 자동 재생");autoMusic.setTypeface(ScenicTypography.font(this,400));autoMusic.setTextColor(INK);autoMusic.setTextSize(16);autoMusic.setMinHeight(d(56));autoMusic.setChecked(getPreferences(0).getBoolean("scene_autoplay",false));autoMusic.setOnCheckedChangeListener((v,checked)->{if(!isDistractingBlocked())getPreferences(0).edit().putBoolean("scene_autoplay",checked).apply();});ambient.addView(autoMusic);
-        gap(ambient,10);ambient.addView(txt("시연용 자체 생성 음악을 사용합니다.",14,MUTED));gap(ambient,16);ambient.addView(button(player.isPlaying()?"분위기 음악 정지":"분위기 음악 미리 듣기",false,()->{if(isDistractingBlocked())return;if(player.isPlaying())player.pause();else{closeMusicWeb();player.playScene(sceneTrack());}render();}),lp(-1,-2));gap(left,12);left.addView(textAction("음악 연결과 작은 창 이용 안내  ›",()->showInformation("음악 연결 안내","AI가 코스의 풍경과 소요 시간에 맞는 공개 플레이리스트 하나를 추천합니다.\n\n‘노래 재생’은 SCENIC 안에서 공식 음악 웹사이트를 엽니다. 재생을 시작한 뒤 ‘작게 보기’를 누르면 같은 플레이어를 작은 창으로 유지하며 경로를 볼 수 있습니다. ‘재생 종료’를 누르면 플레이어를 닫습니다.\n\n로그인은 ‘외부 앱에서 열기’를 이용해 주세요. 작은 창은 SCENIC 안에서 사용하며, 앱을 나가거나 차량 조작이 제한되면 종료됩니다. 실제 재생 가능 여부는 YouTube의 계정·지역·웹 재생 정책에 따라 달라질 수 있습니다.")),lp(-1,-2));
-    }
-    private void openChosenPlaylist(){openChosenPlaylist(false);}
-    private void openChosenPlaylistExternally(){openChosenPlaylist(true);}
-    private void openChosenPlaylist(boolean external){
-        if(!resumed||tab!=1||isDistractingBlocked()){toast("음악 화면은 정차 후 열어 주세요.");return;}
-        MusicContext context=currentMusicContext();
-        if(musicState.select(musicContextKey(context))){cancelMusicRecommendation();render();return;}
-        MusicPlaylist playlist=musicState.playlist();if(playlist==null){toast("AI 음악 추천이 준비될 때까지 기다려 주세요.");return;}
-        player.pause();
-        if(!external&&musicWebDialog!=null&&musicWebDialog.matchesPlaylist(playlist.url)){
-            musicWebDialog.expand();musicMessage="열려 있던 음악 플레이어를 크게 표시했습니다.";updateStatus();return;
-        }
-        closeMusicWeb();
-        if(external){
-            YouTubeMusicLauncher.Result result=YouTubeMusicLauncher.openPlaylist(this,playlist.url);
-            if(result!=YouTubeMusicLauncher.Result.UNAVAILABLE){musicMessage="선택한 플레이리스트를 외부 음악 화면에서 열었습니다.";updateStatus();return;}
-        }
-        try{
-            musicWebDialog=new MusicWebDialog(this,playlist.url,()->{musicWebDialog=null;musicMessage="음악 플레이어를 종료했습니다.";if(resumed)updateStatus();});
-            musicWebDialog.show();
-            musicMessage="재생 후 ‘작게 보기’를 누르면 경로 화면과 함께 볼 수 있어요.";
-        }catch(RuntimeException unavailable){
-            closeMusicWeb();musicMessage="음악 웹 화면을 시작하지 못했습니다. 기기의 Android System WebView를 확인해 주세요.";toast(musicMessage);
-        }
-        updateStatus();
-    }
-    private void closeMusicWeb(){
-        MusicWebDialog previous=musicWebDialog;musicWebDialog=null;if(previous!=null)previous.close();
     }
     private boolean isLegacyCourse(CourseEngine.Course c){return "chuncheon".equals(c.id)||"gangneung".equals(c.id)||"seoul".equals(c.id);}
     private boolean isLiveSelection(){return !preparedBrowse&&livePlan!=null&&livePlan.course!=null&&course==livePlan.course;}
@@ -747,7 +654,7 @@ public final class MainActivity extends Activity implements LocationListener {
     @Override public void onBackPressed(){
         if(running){stopDestinationDemo("안내 시연을 종료했어요.");return;}
         if(destinationPhotoBrowsing&&tab==0){destinationPhotoView.pause();destinationPhotoBrowsing=false;render();return;}
-        if(tab!=0){cancelMusicRecommendation();cancelLiveRequest("화면을 이동해 코스 생성을 취소했습니다.",false);switchExperienceTab(0);return;}
+        if(tab!=0){cancelLiveRequest("화면을 이동해 코스 생성을 취소했습니다.",false);switchExperienceTab(0);return;}
         if(destinationPlanning||destinationWaitingForFix){cancelDestinationWork();destinationMessage="경로 비교를 취소했어요.";render();return;}
         if(preparedBrowse){openLivePlanner();return;}
         if(liveWaitingForFix||liveRequestActive){cancelLiveRequest("코스 생성을 취소했습니다.",true);render();return;}
@@ -807,14 +714,7 @@ public final class MainActivity extends Activity implements LocationListener {
     private boolean isDrivingInteractionBlocked(){return running||demoDriving||knownGpsMoving()||isCarUiBlocked();}
     private boolean gpsVideoBlocked(){if(demo)return false;if(lastLocation==null)return true;long age=(SystemClock.elapsedRealtimeNanos()-lastLocation.getElapsedRealtimeNanos())/1000000;return VehicleSafety.isGpsVideoBlocked(lastLocation.hasSpeed(),lastLocation.getSpeed(),age,lastLocation.hasSpeedAccuracy(),lastLocation.getSpeedAccuracyMetersPerSecond());}
     private boolean isDistractingBlocked(){return running||demoDriving||knownGpsMoving()||gpsVideoBlocked()||isCarUiBlocked();}
-    private void refreshMusicSafety(){
-        if(!resumed||tab!=1)return;
-        boolean blocked=isDistractingBlocked();
-        if(blocked)cancelMusicRecommendation();
-        if(blocked!=musicWasBlocked){render();return;}
-        if(musicState.select(musicContextKey(currentMusicContext()))){cancelMusicRecommendation();render();}
-    }
-    private void enforceVideoSafety(){if(isDistractingBlocked()&&musicWebDialog!=null){closeMusicWeb();musicMessage="주행 상태로 바뀌어 음악 웹 화면을 닫았습니다.";toast(musicMessage);}boolean cancelledLive=isDrivingInteractionBlocked()&&apiRequests.isPending(ApiRequestGate.AI);if(isDrivingInteractionBlocked())invalidateApi(false,false);if(cancelledLive&&resumed){liveMessage="주행 상태로 바뀌어 코스 생성을 취소했습니다. 정차 후 다시 요청해 주세요.";render();}if(((isDrivingInteractionBlocked()&&!actionDialogForConnection)||running||demoDriving||knownGpsMoving()||(vehicleSpeed!=null&&vehicleSpeed>0.1f))&&actionDialog!=null)dismissActionDialog();if(isDistractingBlocked()&&videoDialog!=null){if(videoView!=null)videoView.stopPlayback();videoDialog.dismiss();videoDialog=null;toast("주행 상태에서 영상 재생을 중단했습니다.");}if(isDistractingBlocked()&&tab>=2&&(tab!=5||isDrivingInteractionBlocked())){pauseExperiences();if(running||demoDriving||knownGpsMoving()||(vehicleSpeed!=null&&vehicleSpeed>0.1f)){tab=0;render();}}}
+    private void enforceVideoSafety(){boolean cancelledLive=isDrivingInteractionBlocked()&&apiRequests.isPending(ApiRequestGate.AI);if(isDrivingInteractionBlocked())invalidateApi(false,false);if(cancelledLive&&resumed){liveMessage="주행 상태로 바뀌어 코스 생성을 취소했습니다. 정차 후 다시 요청해 주세요.";render();}if(((isDrivingInteractionBlocked()&&!actionDialogForConnection)||running||demoDriving||knownGpsMoving()||(vehicleSpeed!=null&&vehicleSpeed>0.1f))&&actionDialog!=null)dismissActionDialog();if(isDistractingBlocked()&&videoDialog!=null){if(videoView!=null)videoView.stopPlayback();videoDialog.dismiss();videoDialog=null;toast("주행 상태에서 영상 재생을 중단했습니다.");}if(isDistractingBlocked()&&tab>=2&&(tab!=5||isDrivingInteractionBlocked())){pauseExperiences();if(running||demoDriving||knownGpsMoving()||(vehicleSpeed!=null&&vehicleSpeed>0.1f)){tab=0;render();}}}
     private void playVideo(JSONObject m){if(isDistractingBlocked()){toast("영상은 정차 상태에서만 재생할 수 있습니다.");return;}player.pause();videoView=new VideoView(this);videoView.setVideoURI(Uri.parse(m.optString("uri")));MediaController controls=new MediaController(this);videoView.setMediaController(controls);videoView.setOnErrorListener((mp,what,extra)->{toast("원본 파일에 접근할 수 없습니다. 다시 가져와 주세요.");if(videoDialog!=null)videoDialog.dismiss();return true;});videoView.setOnPreparedListener(mp->{if(isDistractingBlocked()){enforceVideoSafety();return;}videoView.start();});videoDialog=new AlertDialog.Builder(this).setTitle(m.optString("title")).setView(videoView).setNegativeButton("닫기",null).create();videoDialog.setOnDismissListener(dlg->{if(videoView!=null)videoView.stopPlayback();videoDialog=null;});videoDialog.show();styleDialog(videoDialog);if(videoDialog.getWindow()!=null)videoDialog.getWindow().setLayout(d(Math.min(800,windowWidthDp-48)),d(Math.min(460,windowHeightDp-64)));}
     private void chooseMode(){if(isDrivingInteractionBlocked()){toast("여정을 종료하고 정차한 뒤 모드를 변경하세요.");return;}actionDialogForConnection=false;actionDialog=new AlertDialog.Builder(this).setTitle("위치 소스 선택").setAdapter(optionAdapter(new String[]{"데모 모드 · 샘플 명소 자동 이동","실제 GPS · Android 위치 권한 사용"}),(dialog,which)->{if(isDrivingInteractionBlocked()){toast("정차 후 모드를 바꿔 주세요.");return;}cancelLiveRequest("위치 소스가 바뀌었어요. 출발지를 다시 확인해 새 코스를 만들어 주세요.",true);invalidateApi(false,true);demo=which==0;spotIndex=0;lastLocation=null;refreshOnNextFix=nearbyRequested;if(preparedBrowse)refreshLocalRecommendations(false);if(demo){mapGpsEnabled=false;stopGps();if(kakaoMap!=null)kakaoMap.clearLocation();gpsDetail="GPS 꺼짐";notice="시뮬레이터는 차량 상태와 실제 GPS를 변경하지 않습니다.";}else{requestGps();notice="실제 GPS를 사용합니다. 길 안내·실시간 교통은 제공하지 않습니다.";}render();}).show();styleDialog(actionDialog);}
     private void requestGps(){if(checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED)startGps();else requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION},GPS_PERMISSION);}
@@ -839,18 +739,17 @@ public final class MainActivity extends Activity implements LocationListener {
         if(changed)render();else updateStatus();enforceVideoSafety();
     }
     public void onProviderEnabled(String p){updateStatus();}public void onProviderDisabled(String p){gpsDetail="위치 제공자 꺼짐";updateStatus();}public void onStatusChanged(String p,int s,Bundle b){}
-    public void onRequestPermissionsResult(int req,String[] permissions,int[] results){super.onRequestPermissionsResult(req,permissions,results);if(req==45){parkingPermissionResolved=true;if(resumed&&parkingPermissionPending)resumeParkingPermissionNavigation();}else if(req==GPS_PERMISSION){if(checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED){startGps();notice="위치 권한이 연결되었습니다. 현재 위치를 수신하고 있어요.";if(resumed&&resumeDestinationAfterPermission){resumeDestinationAfterPermission=false;requestDestinationRoutes();}}else{gpsDetail="위치 권한 거부";lastLocation=null;if(destinationWaitingForFix||resumeDestinationAfterPermission){resumeDestinationAfterPermission=false;cancelDestinationWork();destinationMessage="위치 권한이 필요해요. 부산역 시연 출발지도 사용할 수 있어요.";}refreshOnNextFix=false;if(preparedBrowse)refreshLocalRecommendations(false);else cancelLiveRequest("위치 권한이 거부되었어요. 서울시청 기준 데모 또는 준비된 코스를 직접 선택할 수 있습니다.",true);notice="위치 권한 없이도 공개 출발지 데모와 준비된 코스를 사용할 수 있습니다.";}render();}else if(req==CAR_PERMISSION){vehicle.stop();vehicle.start();}}
-    private void showConnections(){if(running||demoDriving||knownGpsMoving()||(vehicleSpeed!=null&&vehicleSpeed>0.1f)){toast("주행 중 · 정차 후 상세 정보를 확인해 주세요.");return;}String text="위치: "+(journey.usesGps()?gpsDetail:originLabel())+"\n차량: "+vehicleDetail+"\n\nAndroid Car API가 있는 기기에서만 차속과 UX 제한을 읽습니다. AAOS에서 차량 정보를 읽지 못하면 영상 재생을 보수적으로 잠급니다. 일반 Android 데모에서는 실제 정차 여부를 검증하지 않습니다.\n\nPleos NaviHelper로 목적지와 최대 2개 경유지를 순정 내비에 전달합니다. 차량 현재 위치에서 경로를 다시 탐색하며 지도 경로선과 다를 수 있습니다. 차량 카메라와 자동 촬영은 데모입니다. 직접 가져온 영상은 리캡으로 만들 수 있고 공유 미리보기는 기기에만 저장합니다. 음악은 AI가 드라이브에 맞는 플레이리스트를 고르고, 버튼을 누르면 YouTube Music 앱 또는 웹에서 해당 목록을 엽니다. API 서버는 목적지 검색, 같은 도착지의 빠른 길·풍경 길 비교와 카카오 도로 확인을 연결합니다. 카카오 지도는 별도 JavaScript 키로 연결하며 길 안내는 제공하지 않습니다.";if(isCarUiBlocked())text="차량 UX 제한 또는 차속 미확인으로 화면을 잠갔습니다. 정차 상태에서 필요한 차속 권한을 연결해 주세요.";actionDialogForConnection=true;AlertDialog.Builder dialog=new AlertDialog.Builder(this).setTitle("연결 상태 · 프로토타입").setMessage(text).setPositiveButton("확인",null);if(vehicle.isAutomotive()&&checkSelfPermission("android.car.permission.CAR_SPEED")!=PackageManager.PERMISSION_GRANTED)dialog.setNeutralButton("차속 권한 요청",(dlg,w)->requestPermissions(new String[]{"android.car.permission.CAR_SPEED"},CAR_PERMISSION));actionDialog=dialog.show();styleDialog(actionDialog);}
+    public void onRequestPermissionsResult(int req,String[] permissions,int[] results){super.onRequestPermissionsResult(req,permissions,results);if(req==45){parkingPermissionResolved=true;if(resumed&&parkingPermissionPending)resumeParkingPermissionNavigation();}else if(req==GPS_PERMISSION){if(checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED){startGps();notice="위치 권한이 연결되었습니다. 현재 위치를 수신하고 있어요.";if(resumed&&resumeDestinationAfterPermission){resumeDestinationAfterPermission=false;requestDestinationRoutes();}}else{gpsDetail="위치 권한 거부";lastLocation=null;if(destinationWaitingForFix||resumeDestinationAfterPermission){resumeDestinationAfterPermission=false;cancelDestinationWork();setDestinationFailure("위치 권한이 필요해요. 출발지를 바꾸거나 위치 권한을 허용해 주세요.",false);}refreshOnNextFix=false;if(preparedBrowse)refreshLocalRecommendations(false);else cancelLiveRequest("위치 권한이 거부되었어요. 서울시청 기준 데모 또는 준비된 코스를 직접 선택할 수 있습니다.",true);notice="위치 권한 없이도 공개 출발지 데모와 준비된 코스를 사용할 수 있습니다.";}render();}else if(req==CAR_PERMISSION){vehicle.stop();vehicle.start();}}
+    private void showConnections(){if(running||demoDriving||knownGpsMoving()||(vehicleSpeed!=null&&vehicleSpeed>0.1f)){toast("주행 중 · 정차 후 상세 정보를 확인해 주세요.");return;}String text="위치: "+(journey.usesGps()?gpsDetail:originLabel())+"\n차량: "+vehicleDetail+"\n\nAndroid Car API가 있는 기기에서만 차속과 UX 제한을 읽습니다. AAOS에서 차량 정보를 읽지 못하면 영상 재생을 보수적으로 잠급니다. 일반 Android 데모에서는 실제 정차 여부를 검증하지 않습니다.\n\nPleos NaviHelper로 목적지와 최대 2개 경유지를 순정 내비에 전달합니다. 차량 현재 위치에서 경로를 다시 탐색하며 지도 경로선과 다를 수 있습니다. 차량 카메라와 자동 촬영은 데모입니다. 직접 가져온 영상은 리캡으로 만들 수 있고 공유 미리보기는 기기에만 저장합니다. API 서버는 목적지 검색, 같은 도착지의 빠른 길·풍경 길 비교와 카카오 도로 확인을 연결합니다. 카카오 지도는 별도 JavaScript 키로 연결하며 길 안내는 제공하지 않습니다.";if(isCarUiBlocked())text="차량 UX 제한 또는 차속 미확인으로 화면을 잠갔습니다. 정차 상태에서 필요한 차속 권한을 연결해 주세요.";actionDialogForConnection=true;AlertDialog.Builder dialog=new AlertDialog.Builder(this).setTitle("연결 상태 · 프로토타입").setMessage(text).setPositiveButton("확인",null);if(vehicle.isAutomotive()&&checkSelfPermission("android.car.permission.CAR_SPEED")!=PackageManager.PERMISSION_GRANTED)dialog.setNeutralButton("차속 권한 요청",(dlg,w)->requestPermissions(new String[]{"android.car.permission.CAR_SPEED"},CAR_PERMISSION));actionDialog=dialog.show();styleDialog(actionDialog);}
     private void updateStatus(){
         if(statusView==null)return;
         String mode=plannerMode?(liveOrigin!=null?liveOrigin.label():preparedBrowse?"준비된 드라이브 코스":"AI 코스 찾기 · 출발지 선택 전"):(journey.usesGps()?"현재 위치 · "+gpsDetail:originLabel());
         String car=vehicleConnected?(vehicleSpeed==null?"차속 미확인":Math.round(vehicleSpeed)+" km/h"):vehicle!=null&&vehicle.isAutomotive()?"차량 상태 미확인":"일반 Android · 정차 미검증";
         statusView.setText(mode+"   ·   "+(running&&demoDriving?"안내 시연 중":isDistractingBlocked()?"주행 조작 제한":"정차용 화면"));statusView.setContentDescription(mode+". "+car+". "+notice);
-        if(soundStatus!=null)soundStatus.setText(musicMessage);if(kakaoMap!=null&&!freshLocation())kakaoMap.clearLocation();if(noticeView!=null)noticeView.setText(notice);
+        if(kakaoMap!=null&&!freshLocation())kakaoMap.clearLocation();if(noticeView!=null)noticeView.setText(notice);
     }
     private void invalidateApi(boolean clearAi,boolean clearRoad){
         if(destinationPlanning||destinationSearching||destinationWaitingForFix||parkingChecking)cancelDestinationWork();
-        cancelMusicRecommendation();
         if(liveRequestActive&&apiRequests.isPending(ApiRequestGate.AI)){liveRequestActive=false;liveMessage="코스 생성을 취소했습니다. 다시 요청할 수 있어요.";}
         boolean pending=false;
         for(int i=0;i<apiJobs.length;i++){
@@ -962,7 +861,7 @@ public final class MainActivity extends Activity implements LocationListener {
         if(!savedPhoto.isEmpty()&&selectedScenicPhoto==null){destinationPhotoBrowsing=true;destinationMessage="이전에 선택한 풍경 사진을 다시 확인해 주세요.";}
         captureDemo=new ScenicCaptureDemo(this,new ScenicCaptureDemo.Host(){
             public boolean canInteract(){return destinationInteractionAllowed();}
-            public void onCaptureSaved(ScenicCaptureStore.Record record){destinationMessage="풍경을 저장했어요. ‘리캡’에서 음악이 있는 추억 영상으로 만드세요.";if(resumed&&!isDestroyed())render();}
+            public void onCaptureSaved(ScenicCaptureStore.Record record){destinationMessage="풍경을 저장했어요. 리캡에서 영상으로 만들 수 있어요.";if(resumed&&!isDestroyed())render();}
         });
     }
     private void cancelDestinationWork(){
@@ -974,28 +873,29 @@ public final class MainActivity extends Activity implements LocationListener {
         destinationPlanning=false;destinationSearching=false;
     }
     private void clearDestinationPlan(String message){
-        resumeDestinationAfterPermission=false;cancelDestinationWork();cancelMusicRecommendation();destinationPlan=null;chosenDestinationRoute=null;roadCoordinates=null;roadCourseId=null;destinationMessage=message;
+        resumeDestinationAfterPermission=false;cancelDestinationWork();destinationPlan=null;chosenDestinationRoute=null;roadCoordinates=null;roadCourseId=null;destinationFailed=false;destinationRoadUnavailable=false;destinationMessage=message;
     }
+    private void setDestinationFailure(String message,boolean roadUnavailable){destinationFailed=true;destinationRoadUnavailable=roadUnavailable;destinationMessage=message;}
     private void renderDestinationRoutes(){
         final boolean photoTrip=regionPhotoMode&&selectedScenicPhoto!=null;
-        LinearLayout left=section();addScrollableColumn(left,.35f);panelSpace();
-        left.addView(title(photoTrip?"사진 속 풍경으로":"어디로 갈까요?",28));if(journey.region()!=null){gap(left,8);left.addView(txt(journey.region().name+" · 지역 → 풍경 → 맛집 → 주차",14,MUTED));}left.addView(textAction("목적지를 풍경 피드에서 고르기  ↗",()->switchExperienceTab(3)),lp(-1,-2));gap(left,12);
-        left.addView(title(photoTrip||journey.requiresDirectRoute()?"목적지":"1   목적지",17));gap(left,8);
-        TextView destination=button(destinationPlace==null?"목적지 검색":destinationPlace.name+"  ⌕",false,this::showDestinationSearch);destination.setGravity(Gravity.CENTER_VERTICAL);destination.setTextSize(22);left.addView(destination,lp(-1,-2));
+        LinearLayout left=card();addScrollableColumn(left,.35f);panelSpace();
+        left.addView(title("경로 계획",26));gap(left,8);left.addView(txt(photoTrip?"사진 속 장소까지, 원하는 길로":"목적지와 가는 길을 선택하세요",16,MUTED));gap(left,24);
+        left.addView(title("도착",16));gap(left,8);
+        TextView destination=button(destinationPlace==null?"목적지 검색":destinationPlace.name+"  ›",false,this::showDestinationSearch);destination.setGravity(Gravity.CENTER_VERTICAL);destination.setTextSize(22);destination.setMinHeight(d(64));left.addView(destination,lp(-1,-2));
         if(destinationPlace!=null){gap(left,8);left.addView(txt(destinationPlace.address,14,MUTED));}
-        gap(left,12);left.addView(button(selectedScenicPhoto==null?"풍경 사진으로 경유지 고르기":"다른 풍경 사진 고르기",false,this::openDestinationPhotos),lp(-1,-2));
+        gap(left,12);left.addView(textAction(selectedScenicPhoto==null?"풍경 사진에서 경유지 선택  ›":"선택한 풍경 바꾸기  ›",this::openDestinationPhotos),lp(-1,-2));
         if(selectedScenicPhoto!=null){gap(left,8);left.addView(txt("선택한 풍경 · "+selectedScenicPhoto.place.name,16,INK));left.addView(txt(photoTrip?"선택한 사진의 장소로 갑니다. 정확한 촬영 위치·방향은 확인되지 않았어요.":"원래 목적지 앞에 경유지로 추가합니다. 장소 사진이며 정확한 촬영 지점·차창 조망은 미확인입니다.",14,MUTED));left.addView(textAction("풍경 선택 해제",()->{if(!canChangeRoute())return;forgetScenicPhoto();if(regionPhotoMode&&regionPlace!=null){journey.beginRegion(regionPlace);destinationPlace=regionPlace;destinationPhotoBrowsing=true;}else journey.setScenicWaypoint(null);saveJourney();clearDestinationPlan("풍경 선택을 해제했어요.");render();}),lp(-1,-2));}
         gap(left,12);LinearLayout source=row();source.addView(txt("출발",14,MUTED),lp(42,-2));source.addView(textAction(originLabel()+"  ›",this::showDestinationOrigin),new LinearLayout.LayoutParams(0,-2,1));left.addView(source);gap(left,8);divider(left);gap(left,20);
-        if(!journey.requiresDirectRoute()){LinearLayout budgetHeading=row();budgetHeading.addView(title("2   풍경 길에 쓸 여유 시간",17),new LinearLayout.LayoutParams(0,-2,1));budgetHeading.addView(txt(detourMinutes<=0?"빠른 길만":"최대 +"+detourMinutes+"분",16,INK));left.addView(budgetHeading);gap(left,6);left.addView(txt("빠른 길보다 이만큼 더 걸려도 괜찮다면 풍경 길을 함께 보여드려요.",13,MUTED));gap(left,10);
+        if(!journey.requiresDirectRoute()){LinearLayout budgetHeading=row();budgetHeading.addView(title("더 돌아가도 괜찮은 시간",16),new LinearLayout.LayoutParams(0,-2,1));budgetHeading.addView(txt(detourMinutes<=0?"빠른 길만":"최대 +"+detourMinutes+"분",16,INK));left.addView(budgetHeading);gap(left,6);left.addView(txt("빠른 길보다 추가로 쓸 수 있는 시간",13,MUTED));gap(left,10);
         LinearLayout budgets=row();for(int i=0;i<3;i++){final int value=new int[]{15,30,60}[i];if(i>0)space(budgets,8);budgets.addView(chip("+"+value+"분",detourMinutes==value,()->setDetourMinutes(value)),new LinearLayout.LayoutParams(0,-2,1));}left.addView(budgets);left.addView(textAction("시간 직접 입력  ＋",this::showDetourInput),lp(-1,-2));gap(left,8);
         if(selectedScenicPhoto==null||photoTrip)addDestinationSceneryChoices(left);}else{left.addView(txt("선택한 식당·주차장으로 바로 갑니다.\n다른 관광지를 자동으로 경유하지 않아요.",15,MUTED));}gap(left,20);
         boolean busy=destinationPlanning||destinationWaitingForFix||parkingChecking;
-        TextView compare=button(parkingChecking?"주차 빈자리 확인 중…":destinationWaitingForFix?"현재 위치 확인 중…":destinationPlanning?"도로 확인 중…":journey.requiresDirectRoute()?"경로 확인":photoTrip?(detourMinutes<=0?"이 풍경까지 경로 찾기":"이 풍경까지 · 풍경 길 비교"):detourMinutes<=0?"빠른 길 확인":"빠른 길 · 풍경 길 비교",true,this::requestDestinationRoutes);setBusy(compare,busy||destinationPlace==null);left.addView(compare,lp(-1,-2));
+        TextView compare=button(parkingChecking?"주차 빈자리 확인 중…":destinationWaitingForFix?"현재 위치 확인 중…":destinationPlanning?"도로 확인 중…":journey.requiresDirectRoute()||detourMinutes<=0?"경로 확인":"경로 비교",true,this::requestDestinationRoutes);setBusy(compare,busy||destinationPlace==null);left.addView(compare,lp(-1,-2));
         if(busy){gap(left,12);ProgressBar progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);left.addView(progress,lp(-1,3));left.addView(textAction("취소",()->{cancelDestinationWork();destinationMessage="경로 찾기를 취소했어요.";render();}),lp(-1,-2));}
-        if(!destinationMessage.isEmpty()){gap(left,12);left.addView(txt(destinationMessage,14,MUTED));}
+        if(chosenDestinationRoute!=null&&!destinationMessage.isEmpty()){gap(left,12);left.addView(txt(destinationMessage,14,MUTED));}
         if(destinationPlan!=null){gap(left,20);divider(left);gap(left,20);left.addView(title(photoTrip?"선택한 풍경까지":journey.requiresDirectRoute()?"선택한 장소까지":"같은 목적지, 다른 길",19));gap(left,12);for(DestinationRoutePlan.Route option:destinationPlan.routes){left.addView(destinationRouteCard(option),lp(-1,-2));gap(left,10);}}
         LinearLayout right=col();addScrollableColumn(right,.65f);
-        if(chosenDestinationRoute==null){renderDestinationWelcome(right,busy);return;}
+        if(chosenDestinationRoute==null){renderDestinationWelcome(right,busy);addParkingWatchControls(right);return;}
         renderDestinationMap(right);
     }
     private void selectDestinationScenery(String id){
@@ -1003,7 +903,7 @@ public final class MainActivity extends Activity implements LocationListener {
         destinationTheme=id;clearDestinationPlan("풍경 조건을 바꿨어요. 경로를 다시 비교해 주세요.");render();
     }
     private void addDestinationSceneryChoices(LinearLayout parent){
-        LinearLayout heading=row();heading.addView(title("3   보고 싶은 풍경",17),new LinearLayout.LayoutParams(0,-2,1));
+        LinearLayout heading=row();heading.addView(title("보고 싶은 풍경",16),new LinearLayout.LayoutParams(0,-2,1));
         heading.addView(chip("모든 풍경",destinationTheme.equals("all"),()->selectDestinationScenery("all")),lp(112,-2));parent.addView(heading);gap(parent,10);
         String[] ids={"coast","mountain","forest","water","countryside","city"};
         String[] labels={"바다 · 해안","산 · 전망","숲 · 나무길","강 · 호수","들판 · 농촌","도시 풍경"};
@@ -1029,8 +929,8 @@ public final class MainActivity extends Activity implements LocationListener {
         return android.text.TextUtils.join(" · ",facts);
     }
     private LinearLayout destinationRouteCard(DestinationRoutePlan.Route option){
-        boolean selected=option==chosenDestinationRoute,scenic=!option.isFast();LinearLayout item=col();item.setPadding(d(20),d(20),d(20),d(20));item.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656),bg(selected?SOFT:PANEL,selected?ACCENT:LINE),null));
-        boolean curated="curated".equals(option.id);TextView kind=txt(option.isFast()?"가장 빠름":curated?"검증된 코스":"풍경 분석",12,option.isFast()?MUTED:0xff1d7a4a);kind.setPadding(d(10),d(5),d(10),d(5));kind.setBackground(bg(option.isFast()?0xffeef0ef:0xffe3f3ea,0));item.addView(kind,lp(-2,-2));gap(item,8);
+        boolean selected=option==chosenDestinationRoute,scenic=!option.isFast();LinearLayout item=col();item.setPadding(d(20),d(20),d(20),d(20));item.setBackground(new RippleDrawable(ColorStateList.valueOf(ScenicDesign.RIPPLE),bg(selected?SOFT:PANEL,selected?ACCENT:LINE),null));
+        boolean curated="curated".equals(option.id);TextView kind=txt((option.isFast()?"시간 우선":curated?"추천 코스":"풍경 우선")+(selected?" · 선택됨":""),14,selected?PANEL:ACCENT);kind.setPadding(d(10),d(5),d(10),d(5));kind.setBackground(bg(selected?ACCENT:SOFT,0));item.addView(kind,lp(-2,-2));gap(item,8);
         LinearLayout heading=row();heading.addView(title(regionPhotoMode&&selectedScenicPhoto!=null&&option.isFast()?"사진 장소로 가는 길":option.label(),21),new LinearLayout.LayoutParams(0,-2,1));heading.addView(title((int)Math.ceil(option.durationMin)+"분",24));item.addView(heading);gap(item,10);
         String extra=scenic&&destinationPlan!=null?" · 빠른 길보다 +"+(int)Math.ceil(Math.max(0,option.durationMin-destinationPlan.fast.durationMin))+"분":"";
         item.addView(txt(String.format(Locale.KOREA,"%.1f km",option.distanceKm)+extra,15,scenic?INK:MUTED));gap(item,8);
@@ -1043,27 +943,70 @@ public final class MainActivity extends Activity implements LocationListener {
     }
     private void renderDestinationWelcome(LinearLayout right,boolean busy){
         final boolean direct=journey.requiresDirectRoute();
-        LinearLayout welcome=card();right.addView(welcome,lp(-1,-2));welcome.addView(txt("SCENIC ROUTE",14,MUTED));gap(welcome,18);boolean photoPick=regionPhotoMode&&selectedScenicPhoto!=null;welcome.addView(title(destinationLabel()+(direct?"까지,\n바로 가는 길":photoPick?"까지,\n경로를 확인해요":"까지,\n어떤 길로 갈까요?"),34));gap(welcome,18);
-        if(direct||regionPhotoMode)welcome.addView(txt(direct?"선택한 장소까지 바로 안내합니다.":"사진 속 장소로 가는 길과 주변 먹거리를 준비하세요.",18,INK));
-        else{String[] steps={"1   왼쪽에서 여유 시간과 보고 싶은 풍경을 고르세요","2   빠른 길과 풍경 길을 한눈에 비교하세요","3   마음에 드는 길로 순정 내비 안내를 시작하세요"};for(int i=0;i<steps.length;i++){if(i>0)gap(welcome,8);welcome.addView(txt(steps[i],18,INK));}}
-        gap(welcome,24);
-        LinearLayout trip=row();trip.addView(txt(originLabel(),17,INK),new LinearLayout.LayoutParams(0,-2,1));space(trip,20);trip.addView(txt("→",22,MUTED));space(trip,20);trip.addView(title(destinationLabel(),20),new LinearLayout.LayoutParams(0,-2,1));welcome.addView(trip);gap(welcome,24);divider(welcome);gap(welcome,20);
-        welcome.addView(txt(direct?(busy?"선택한 장소까지 자동차로 접근할 수 있는 도로를 확인하고 있어요.":"경로를 확인한 뒤 순정 내비로 안내를 시작할 수 있어요."):regionPhotoMode?"선택한 풍경이 방문 목적지입니다. 정확한 촬영 위치와 시야는 현장에서 확인해 주세요.":busy?"같은 도착지를 유지하며 도로와 추가 시간을 확인하고 있어요.":"도착지는 그대로예요. 가는 길에 만날 풍경만 더해요.",16,MUTED));gap(right,20);
-        if(selectedScenicPhoto!=null){right.addView(destinationPhotoView.createSelectionPreview(selectedScenicPhoto,regionPhotoMode),lp(-1,-2));}
-        else if(!direct){right.addView(button("목적지 주변 풍경 사진에서 고르기",true,this::openDestinationPhotos),lp(-1,-2));gap(right,12);right.addView(txt("사진을 고르면 해당 장소를 거쳐 원래 목적지로 가는 도로를 찾습니다.",16,MUTED));}
+        final boolean needsPhoto=regionPhotoMode&&selectedScenicPhoto==null;
+        final boolean alternativeReady=destinationPlan!=null&&destinationPlan.fast!=null;
+        LinearLayout welcome=card();welcome.setBackground(bg(ScenicDesign.HERO,0));right.addView(welcome,lp(-1,-2));
+        welcome.addView(txt(needsPhoto?"살펴볼 지역":"도착",14,ScenicDesign.HERO_MUTED));gap(welcome,8);
+        TextView heading=title(destinationLabel(),wide?30:26);heading.setTextColor(PANEL);welcome.addView(heading);gap(welcome,8);
+        welcome.addView(txt(originLabel()+"에서 출발",16,ScenicDesign.HERO_MUTED));gap(right,16);
+
+        LinearLayout state=card();right.addView(state,lp(-1,-2));
+        String stateTitle=busy?(destinationWaitingForFix?"현재 위치를 확인하고 있어요":"도로 경로를 확인하고 있어요")
+            :destinationFailed?"경로를 표시하지 못했어요":alternativeReady?"선택한 풍경을 지나는 길을 찾지 못했어요":needsPhoto?"사진 속 목적지를 선택해 주세요":"경로를 비교해 보세요";
+        state.addView(txt(stateTitle,22,destinationFailed?ScenicDesign.DANGER:INK));gap(state,8);
+        String detail=busy?"출발지와 목적지를 확인하고 있어요. 잠시만 기다려 주세요."
+            :destinationFailed?(destinationRoadUnavailable&&regionPhotoMode&&selectedScenicPhoto!=null?"사진의 대표 위치 150m 이내에 도착하는 도로를 확인하지 못했어요. 주변 주차장을 도착지로 선택하거나 다른 풍경을 골라 주세요.":destinationMessage)
+            :alternativeReady?"원래 목적지까지 가는 빠른 길은 확인했어요. 풍경 경유 없이 이동할 수 있어요."
+            :needsPhoto?"지도는 탐색할 지역을 보여줍니다. 방문할 장소를 사진에서 골라 주세요."
+            :destinationMessage.isEmpty()?(direct?"경로 확인을 누르면 실제 도로와 소요 시간이 표시됩니다.":"경로 비교를 누르면 같은 목적지까지 가는 빠른 길과 풍경 길을 확인할 수 있어요."):destinationMessage;
+        state.addView(txt(detail,16,MUTED));
+        if(busy){gap(state,16);ProgressBar progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);state.addView(progress,lp(-1,4));}
+        else if(destinationFailed){
+            gap(state,16);LinearLayout actions=wide?row():col();
+            boolean parking=destinationRoadUnavailable&&destinationPlace!=null;
+            TextView retry=button(parking?"주변 주차장 찾기":"다시 시도",true,parking?this::openDestinationParking:this::requestDestinationRoutes);
+            TextView change=button(selectedScenicPhoto!=null?"풍경 다시 선택":"목적지 변경",false,selectedScenicPhoto!=null?this::openDestinationPhotos:this::showDestinationSearch);
+            actions.addView(retry,wide?new LinearLayout.LayoutParams(0,-2,1):lp(-1,-2));if(wide)space(actions,8);else gap(actions,8);actions.addView(change,wide?new LinearLayout.LayoutParams(0,-2,1):lp(-1,-2));state.addView(actions,lp(-1,-2));
+            if(parking)state.addView(textAction("같은 위치로 다시 시도",this::requestDestinationRoutes),lp(-1,-2));
+        }else if(alternativeReady){gap(state,16);state.addView(button("풍경 경유 없이 빠른 길 보기",true,()->{if(!canChangeRoute())return;selectDestinationRoute(destinationPlan.fast);render();}),lp(-1,-2));}
+        else if(needsPhoto){gap(state,16);state.addView(button("풍경 사진 고르기",true,this::openDestinationPhotos),lp(-1,-2));}
+
+        if(destinationPlace!=null){gap(right,16);renderDestinationPreviewMap(right,needsPhoto);}
+        gap(right,16);
+        if(selectedScenicPhoto!=null)right.addView(destinationPhotoView.createSelectionPreview(selectedScenicPhoto,regionPhotoMode),lp(-1,-2));
+        else if(!direct){
+            LinearLayout next=card();next.addView(title("길에서 만날 풍경",22));gap(next,8);next.addView(txt("목적지 주변 사진을 보고 경유지를 더할 수 있어요.",16,MUTED));gap(next,16);
+            next.addView(button("주변 풍경 보기",false,this::openDestinationPhotos),lp(-1,-2));right.addView(next,lp(-1,-2));
+        }
+    }
+    private void renderDestinationPreviewMap(LinearLayout right,boolean regionPreview){
+        LinearLayout panel=card();right.addView(panel,lp(-1,-2));panel.addView(title(regionPreview?"탐색할 지역":"출발지와 목적지",20));gap(panel,12);
+        List<CourseEngine.Spot> stops=new ArrayList<>();
+        if(!journey.usesGps())stops.add(new CourseEngine.Spot(originLabel(),"출발",journey.originLat(),journey.originLon()));
+        else if(freshLocation())stops.add(new CourseEngine.Spot("출발 위치","출발",lastLocation.getLatitude(),lastLocation.getLongitude()));
+        stops.add(new CourseEngine.Spot((regionPreview?"탐색 지역 · ":"")+destinationPlace.name,"선택한 장소",destinationPlace.lat,destinationPlace.lon));
+        CourseEngine.Course preview=new CourseEngine.Course("destination-preview",destinationLabel(),"","","","",0,stops.toArray(new CourseEngine.Spot[0]));
+        int height=wide?520:360;
+        try{if(kakaoMap==null)kakaoMap=new KakaoMapView(this);kakaoMap.setBackground(bg(SOFT,0));kakaoMap.setClipToOutline(true);kakaoMap.loadServer(apiBaseUrl);kakaoMap.setScene(preview,stops.size()-1,null);if(journey.usesGps()&&freshLocation())kakaoMap.setLocation(lastLocation,false);else kakaoMap.clearLocation();panel.addView(kakaoMap,lp(-1,height));if(resumed)kakaoMap.onResume();}
+        catch(RuntimeException unavailable){panel.addView(txt("지도를 불러오지 못했어요. 서버 연결을 확인하고 다시 시도해 주세요.",16,MUTED));}
+        panel.addView(textAction("지도 새로고침",()->{if(kakaoMap!=null)kakaoMap.reload();}),lp(-1,-2));
+    }
+    private void openDestinationParking(){
+        if(!canChangeRoute()||destinationPlace==null)return;
+        journey.selectNearbyAnchor(destinationPlace);saveJourney();switchExperienceTab(5);nearbyStops.findParkingAtAnchor();
     }
     private void renderDestinationMap(LinearLayout right){
         DestinationRoutePlan.Route route=chosenDestinationRoute;boolean scenic=!route.isFast();
         LinearLayout panel=card();right.addView(panel,lp(-1,-2));LinearLayout heading=row();heading.addView(title(destinationLabel()+"까지",27),new LinearLayout.LayoutParams(0,-2,1));heading.addView(txt(regionPhotoMode&&selectedScenicPhoto!=null&&route.isFast()?"사진 속 장소 방문":route.label(),16,INK));panel.addView(heading);gap(panel,10);panel.addView(txt(originLabel()+" → "+destinationLabel(),15,MUTED));gap(panel,20);
         LinearLayout metrics=row();addMetric(metrics,(int)Math.ceil(route.durationMin)+"분","예상 이동 시간");addMetric(metrics,String.format(Locale.KOREA,"%.1f km",route.distanceKm),"도로 거리");addMetric(metrics,scenic?"+"+(int)Math.ceil(Math.max(0,route.durationMin-destinationPlan.fast.durationMin))+"분":"기준 경로",scenic?"빠른 길 대비":"시간 우선");panel.addView(metrics);gap(panel,12);
-        if(scenic){panel.addView(txt(route.reason,13,MUTED));gap(panel,4);panel.addView(txt("지도 분석 출처: © OpenStreetMap contributors · 고도 AWS Terrain Tiles · 코스 한국관광공사 TourAPI",12,MUTED));}
+        if(scenic){panel.addView(txt(cardHeadline(route),16,INK));}
         gap(panel,16);
         if(running&&demoDriving){LinearLayout guidance=col();guidance.setPadding(d(16),d(14),d(16),d(14));guidance.setBackground(bg(SOFT,0));guidance.addView(title("경로 안내 · 시연",18));gap(guidance,8);guidance.addView(txt(navigationDemoStep==0?"선택한 길을 따라 목적지로 출발합니다.":!route.checkpoints.isEmpty()?(navigationDemoStep>=1&&navigationDemoStep<=route.checkpoints.size()?"촬영 지점 · "+route.checkpoints.get(navigationDemoStep-1).name+(captureDemo.autoCaptureEnabled()?" · 자동 기록(시연)":" · 자동 기록 꺼짐"):"목적지에 가까워지고 있어요."):navigationDemoStep==1?segmentLabel()+" 구간 · 빌트인 캠 풍경 저장 시연":"목적지에 가까워지고 있어요.",16,INK));gap(guidance,8);ProgressBar progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setMax(demoTotalSteps());progress.setProgress(Math.min(demoTotalSteps(),navigationDemoStep+1));guidance.addView(progress,lp(-1,4));panel.addView(guidance);gap(panel,14);}
         CourseEngine.Course mapCourse=route.toCourse(originLabel());course=mapCourse;
-        int height=Math.max(240,Math.min(370,ScenicLayoutPolicy.mapHeight(windowWidthDp,windowHeightDp,wide)));
+        int height=Math.max(240,Math.min(wide?520:360,ScenicLayoutPolicy.mapHeight(windowWidthDp,windowHeightDp,wide)+(wide?80:0)));
         try{if(kakaoMap==null)kakaoMap=new KakaoMapView(this);kakaoMap.setBackground(bg(SOFT,0));kakaoMap.setClipToOutline(true);kakaoMap.loadServer(apiBaseUrl);kakaoMap.setScene(mapCourse,running?Math.min(navigationDemoStep,mapCourse.spots.length-1):0,route.coordinates);if(journey.usesGps()&&freshLocation())kakaoMap.setLocation(lastLocation,false);else kakaoMap.clearLocation();panel.addView(kakaoMap,lp(-1,height));if(resumed)kakaoMap.onResume();}
         catch(RuntimeException unavailable){panel.addView(txt("지도를 표시하지 못했어요. 설정에서 서버 연결을 확인해 주세요.",16,MUTED));}
-        panel.addView(textAction("지도 새로고침",()->{if(destinationInteractionAllowed()&&kakaoMap!=null)kakaoMap.reload();}),lp(-1,-2));gap(panel,12);addNativeNavigation(panel);addParkingWatchControls(panel);
+        LinearLayout mapTools=wide?row():col();mapTools.addView(textAction("지도 새로고침",()->{if(destinationInteractionAllowed()&&kakaoMap!=null)kakaoMap.reload();}),wide?new LinearLayout.LayoutParams(0,-2,1):lp(-1,-2));if(scenic)mapTools.addView(textAction("경로 상세·출처",()->showInformation("경로 정보",route.reason+"\n\n지도 분석: © OpenStreetMap contributors\n고도: AWS Terrain Tiles\n코스: 한국관광공사 TourAPI")),wide?new LinearLayout.LayoutParams(0,-2,1):lp(-1,-2));panel.addView(mapTools);gap(panel,12);addNativeNavigation(panel);addParkingWatchControls(panel);
         if(journey.scenic()!=null||selectedScenicPhoto!=null){gap(panel,16);panel.addView(button("풍경 주변 맛집과 주차 찾기  →",false,this::openScenicDining),lp(-1,-2));}
         gap(panel,24);divider(panel);gap(panel,20);LinearLayout actions=row();actions.addView(button(running?"시연 종료":"안내 시연 시작",false,this::toggleDestinationDemo),new LinearLayout.LayoutParams(0,-2,1));space(actions,12);actions.addView(button("빌트인 캠 촬영 시연",false,()->captureDemo.showCapture(destinationRouteId(),destinationRouteName(),destinationLabel(),segmentLabel())),new LinearLayout.LayoutParams(0,-2,1));panel.addView(actions);gap(panel,12);panel.addView(txt("빌트인 캠 촬영은 공개 사진을 사용하는 시연입니다.",14,MUTED));
         if(journey.parking()!=null&&journey.restaurant()!=null){gap(panel,20);panel.addView(title("주차 후 방문할 식당",18));gap(panel,8);panel.addView(txt(journey.restaurant().name+" · "+journey.restaurant().address,16,INK));panel.addView(txt("주차장→식당 직선 "+Math.round(CourseEngine.distanceMeters(journey.parking().lat,journey.parking().lon,journey.restaurant().lat,journey.restaurant().lon))+"m · 실제 입구와 도보 경로는 미확인",13,MUTED));gap(panel,8);panel.addView(button("식당 위치 확인",false,()->{try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://place.map.kakao.com/"+journey.restaurant().id)));}catch(Exception unavailable){toast("장소 정보를 열 앱이 없어요.");}}),lp(-1,-2));}
@@ -1072,7 +1015,7 @@ public final class MainActivity extends Activity implements LocationListener {
     private void selectDestinationRoute(DestinationRoutePlan.Route route){
         cancelParkingCheck();
         if(nativeNavigation!=null)nativeNavigation.pause();
-        cancelMusicRecommendation();chosenDestinationRoute=route;checkpointTracker=new CheckpointTracker(route.checkpoints);demoCheckpointSaves=0;trackingLiveCheckpoints=false;if(selectedScenicPhoto!=null&&!regionPhotoMode){journey.setScenicWaypoint("scenic".equals(route.id)?selectedScenicPhoto.place:null);saveJourney();}course=route.toCourse(originLabel());roadCoordinates=route.coordinates;roadCourseId=course.id;roadDistanceKm=route.distanceKm;roadDurationMin=route.durationMin;spotIndex=0;destinationMessage="";
+        destinationFailed=false;destinationRoadUnavailable=false;chosenDestinationRoute=route;checkpointTracker=new CheckpointTracker(route.checkpoints);demoCheckpointSaves=0;trackingLiveCheckpoints=false;if(selectedScenicPhoto!=null&&!regionPhotoMode){journey.setScenicWaypoint("scenic".equals(route.id)?selectedScenicPhoto.place:null);saveJourney();}course=route.toCourse(originLabel());roadCoordinates=route.coordinates;roadCourseId=course.id;roadDistanceKm=route.distanceKm;roadDurationMin=route.durationMin;spotIndex=0;destinationMessage="";
     }
     private void showDestinationOrigin(){
         if(!canChangeRoute())return;actionDialogForConnection=false;
@@ -1106,30 +1049,30 @@ public final class MainActivity extends Activity implements LocationListener {
         clearDestinationPlan("");pendingParkingNavigation=navigateToParking;
         if(journey.usesGps()&&!freshLocation()){
             mapGpsEnabled=true;destinationWaitingForFix=true;final long revision=destinationRevision;destinationMessage="현재 위치를 받고 있어요.";resumeDestinationAfterPermission=checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)!=PackageManager.PERMISSION_GRANTED;requestGps();render();
-            handler.postDelayed(()->{if(destinationWaitingForFix&&revision==destinationRevision){cancelDestinationWork();destinationMessage="현재 위치를 받지 못했어요. 출발지에서 부산역 시연을 선택할 수 있어요.";if(resumed)render();}},20000);return;
+            handler.postDelayed(()->{if(destinationWaitingForFix&&revision==destinationRevision){cancelDestinationWork();setDestinationFailure("현재 위치를 받지 못했어요. 출발지를 바꾸거나 다시 시도해 주세요.",false);if(resumed)render();}},20000);return;
         }
         beginDestinationRouting();
     }
     private void beginDestinationRouting(){
         if(!resumed||!canChangeRoute()||destinationPlace==null)return;destinationWaitingForFix=false;
-        if(journey.usesGps()&&(!freshLocation()||!CourseEngine.inKorea(lastLocation.getLatitude(),lastLocation.getLongitude()))){destinationMessage="국내 위치를 받은 뒤 이용하거나 부산역 시연 출발지를 선택해 주세요.";render();return;}
+        if(journey.usesGps()&&(!freshLocation()||!CourseEngine.inKorea(lastLocation.getLatitude(),lastLocation.getLongitude()))){setDestinationFailure("국내 위치를 받은 뒤 이용하거나 출발지를 바꿔 주세요.",false);render();return;}
         final double lat=journey.usesGps()?lastLocation.getLatitude():journey.originLat(),lon=journey.usesGps()?lastLocation.getLongitude():journey.originLon();
         if(journey.usesGps()){journey.setOrigin(true,lat,lon,"현재 위치");saveJourney();}
         final boolean usedGps=journey.usesGps();final DestinationPlace target=destinationPlace;final int extra=journey.requiresDirectRoute()?0:detourMinutes;final int photoExtra=detourMinutes;final String theme=destinationTheme;final ScenicPhotoCollection.Photo requestedPhoto=selectedScenicPhoto;final long revision=destinationRevision;
         final DestinationPlace requestedRegion=regionPhotoMode?regionPlace:null;final boolean photoDestination=requestedRegion!=null&&requestedPhoto!=null;final boolean navigateParking=pendingParkingNavigation;pendingParkingNavigation=false;final boolean parkingDestination=sameJourneyPlace(target,journey.parking());
         destinationPlanning=true;destinationMessage=photoDestination?"사진 속 장소로 가는 도로를 확인하고 있어요. 지역 중심으로 돌아가지 않습니다.":requestedPhoto==null?"목적지까지 실제 도로를 확인하고 있어요.":"선택한 "+requestedPhoto.place.name+"을 거쳐 원래 목적지로 가는 도로와 추가 시간을 확인하고 있어요.";final ScenicApiClient client=new ScenicApiClient(apiBaseUrl);destinationClient=client;render();
-        destinationJob=apiExecutor.submit(()->{DestinationRoutePlan plan=null;String failure=null;try{plan=photoDestination?DestinationRoutePlan.parsePhotoDestination(client.photoDestinationRoutes(lat,lon,requestedRegion,theme,requestedPhoto.selectionToken,photoExtra),requestedRegion,requestedPhoto.place,lat,lon,theme,photoExtra):DestinationRoutePlan.parse(client.destinationRoutes(lat,lon,target,extra,theme,requestedPhoto==null?null:requestedPhoto.selectionToken),target,lat,lon,extra,theme,requestedPhoto==null?null:requestedPhoto.place);}catch(ScenicApiClient.ApiException error){failure=error.getMessage();}catch(Exception invalid){failure="경로 응답을 확인하지 못했어요. 다시 비교해 주세요.";}final DestinationRoutePlan result=plan;final String error=failure;
+        destinationJob=apiExecutor.submit(()->{DestinationRoutePlan plan=null;String failure=null;boolean noRoad=false;try{plan=photoDestination?DestinationRoutePlan.parsePhotoDestination(client.photoDestinationRoutes(lat,lon,requestedRegion,theme,requestedPhoto.selectionToken,photoExtra),requestedRegion,requestedPhoto.place,lat,lon,theme,photoExtra):DestinationRoutePlan.parse(client.destinationRoutes(lat,lon,target,extra,theme,requestedPhoto==null?null:requestedPhoto.selectionToken),target,lat,lon,extra,theme,requestedPhoto==null?null:requestedPhoto.place);}catch(ScenicApiClient.ApiException error){failure=error.getMessage();noRoad=error.statusCode==422;}catch(Exception invalid){failure="경로 응답을 확인하지 못했어요. 다시 비교해 주세요.";}final DestinationRoutePlan result=plan;final String error=failure;final boolean unreachable=noRoad;
             handler.post(()->{if(!resumed||isDestroyed()||isFinishing()||revision!=destinationRevision)return;destinationPlanning=false;destinationClient=null;destinationJob=null;if(!canChangeRoute())return;
-                if(usedGps&&(!freshLocation()||CourseEngine.distanceMeters(lat,lon,lastLocation.getLatitude(),lastLocation.getLongitude())>1000)){destinationMessage="출발 위치가 달라졌어요. 현재 위치로 다시 비교해 주세요.";render();return;}
-                if(error!=null||result==null){destinationMessage=error==null?"경로를 찾지 못했어요.":error;render();return;}
-                if(parkingDestination){double[] end=result.fast.coordinates[result.fast.coordinates.length-1];if(CourseEngine.distanceMeters(target.lat,target.lon,end[0],end[1])>150){destinationMessage="주차장 150m 이내로 도착하는 도로를 확인하지 못했어요. 맛집·주차에서 다른 주차장을 선택해 주세요.";render();return;}}
+                if(usedGps&&(!freshLocation()||CourseEngine.distanceMeters(lat,lon,lastLocation.getLatitude(),lastLocation.getLongitude())>1000)){setDestinationFailure("출발 위치가 달라졌어요. 현재 위치로 다시 비교해 주세요.",false);render();return;}
+                if(error!=null||result==null){setDestinationFailure(error==null?"경로를 찾지 못했어요.":error,unreachable);render();return;}
+                if(parkingDestination){double[] end=result.fast.coordinates[result.fast.coordinates.length-1];if(CourseEngine.distanceMeters(target.lat,target.lon,end[0],end[1])>150){setDestinationFailure("주차장 150m 이내로 도착하는 도로를 확인하지 못했어요. 다른 주차장을 선택해 주세요.",true);render();return;}}
                 destinationPlace=result.destination;destinationPlan=result;if(result.scenic!=null)selectDestinationRoute(result.scenic);else if(result.curated!=null)selectDestinationRoute(result.curated);else if(requestedPhoto==null||photoDestination)selectDestinationRoute(result.fast);destinationMessage=result.scenic==null&&result.curated==null?result.message:"";render();
                 if(navigateParking&&journey.parking()!=null&&journey.parking().id.equals(target.id)&&chosenDestinationRoute!=null)requestNativeNavigation(false);
             });});
     }
     private void toggleDestinationDemo(){
         if(running){stopDestinationDemo("안내 시연을 종료했어요.");return;}
-        if(chosenDestinationRoute==null||!destinationInteractionAllowed())return;cancelDestinationWork();cancelMusicRecommendation();running=true;demoDriving=true;navigationDemoStep=0;navigationDemoSaved=false;checkpointTracker=new CheckpointTracker(routeCheckpoints());demoCheckpointSaves=0;trackingLiveCheckpoints=false;destinationMessage="실제 주행과 분리된 안내 시연입니다.";render();handler.postDelayed(destinationDemoTicker,7000);
+        if(chosenDestinationRoute==null||!destinationInteractionAllowed())return;cancelDestinationWork();running=true;demoDriving=true;navigationDemoStep=0;navigationDemoSaved=false;checkpointTracker=new CheckpointTracker(routeCheckpoints());demoCheckpointSaves=0;trackingLiveCheckpoints=false;destinationMessage="실제 주행과 분리된 안내 시연입니다.";render();handler.postDelayed(destinationDemoTicker,7000);
     }
     private void stopDestinationDemo(String message){running=false;demoDriving=false;handler.removeCallbacks(destinationDemoTicker);handler.removeCallbacks(simulator);player.pause();destinationMessage=message;if(resumed)render();}
     private final Runnable destinationDemoTicker=new Runnable(){public void run(){

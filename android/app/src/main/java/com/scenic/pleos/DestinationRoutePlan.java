@@ -205,6 +205,7 @@ public final class DestinationRoutePlan {
             if(distanceToRoute(lat,lon,coordinates,originLat)>(expectedScenicPlace==null?700.000001:150.000001))throw invalid();
             waypoints.add(new CourseEngine.Spot(name,"풍경 길 통과 지점 · 별도 체류 시간 없음 · "+waypointSource,lat,lon));
         }
+        if(!reachesInOrder(waypoints,coordinates,originLat,expectedScenicPlace==null?700.000001:150.000001))throw invalid();
         // The fast road has no scenery checkpoints; a malformed list rejects the whole response.
         List<RouteCheckpoint> checkpoints=RouteCheckpoint.parseAll(object);
         if("fast".equals(id)&&!checkpoints.isEmpty())throw invalid();
@@ -227,6 +228,26 @@ public final class DestinationRoutePlan {
             min=Math.min(min,Math.hypot(ax+t*dx,ay+t*dy));
         }
         return min;
+    }
+    /** A later stop may be passed early, provided the road reaches it again in the requested order. */
+    private static boolean reachesInOrder(List<CourseEngine.Spot> stops,double[][] coordinates,double referenceLat,double radius){
+        double latitudeScale=6371000*Math.PI/180,longitudeScale=latitudeScale*Math.cos(Math.toRadians(referenceLat)),progress=0;
+        int segment=1;
+        for(CourseEngine.Spot stop:stops){
+            boolean reached=false;
+            for(;segment<coordinates.length;segment++,progress=0){
+                double ax=(coordinates[segment-1][1]-stop.lon)*longitudeScale,ay=(coordinates[segment-1][0]-stop.lat)*latitudeScale;
+                double dx=(coordinates[segment][1]-coordinates[segment-1][1])*longitudeScale,dy=(coordinates[segment][0]-coordinates[segment-1][0])*latitudeScale,length=dx*dx+dy*dy;
+                if(length==0){if(ax*ax+ay*ay<=radius*radius){reached=true;break;}continue;}
+                double center=-(ax*dx+ay*dy)/length,closestX=ax+center*dx,closestY=ay+center*dy;
+                double margin=radius*radius-closestX*closestX-closestY*closestY;
+                if(margin<0)continue;
+                double reach=Math.sqrt(margin/length),entry=Math.max(progress,center-reach);
+                if(entry<=1&&entry<=center+reach){progress=entry;reached=true;break;}
+            }
+            if(!reached)return false;
+        }
+        return true;
     }
     private static boolean same(double a,double b){return Math.abs(a-b)<=0.0000001;}
     private static String text(JSONObject object,String key,int max)throws JSONException{return DestinationPlace.text(object,key,max,false);}

@@ -42,10 +42,20 @@ public final class ParkingReroutePolicy {
         private Proposal(String level,ParkingAvailability current,DestinationPlace alternative,ParkingAvailability availability){this.level=level;this.current=current;this.alternative=alternative;alternativeAvailability=availability;}
         public String key(){return alternative==null||level==null?"":alternative.id+"|"+level;}
     }
+    /** Immutable approval for one displayed destination and one subsequent recheck. */
+    public static final class Consent {
+        public final DestinationPlace alternative;
+        public Consent(Proposal proposal){
+            if(proposal==null||proposal.alternative==null)throw new IllegalArgumentException("No parking proposal to accept");
+            alternative=proposal.alternative;
+        }
+        public boolean requiresRecheck(Consent requested){return requested!=this;}
+        public boolean permits(Proposal result,Consent requested){return !requiresRecheck(requested)&&result!=null&&samePlace(alternative,result.alternative);}
+    }
     /**
      * Proposes a switch when the current lot is full or nearly full and a clearly roomier one is nearby.
      * Fresh official snapshots count as evidence here because the driver still decides.
-     * preferredId lets an accepted suggestion keep its lot if that lot is still a valid choice.
+     * preferredId restricts a consent recheck to the accepted lot; it must never substitute another lot.
      */
     public static Proposal propose(JSONObject response,DestinationPlace target,Set<String> excluded,long now,String preferredId)throws JSONException {
         if(target==null||!"Kakao Local".equals(response.getString("source"))||!"parking".equals(response.getString("kind")))throw new JSONException("Invalid parking lookup");
@@ -60,6 +70,7 @@ public final class ParkingReroutePolicy {
         for(int i=0;i<rows.length();i++){
             JSONObject row=rows.getJSONObject(i);DestinationPlace candidate=place(row);ParkingAvailability availability=ParkingAvailability.read(row,now);
             if(candidate.id.equals(target.id)||excluded.contains(candidate.id)||!availability.isAvailable(now)||availability.isLow(now))continue;
+            if(preferredId!=null&&!candidate.id.equals(preferredId))continue;
             if(Proposal.LOW.equals(level)&&availability.availableSpaces<=current.availableSpaces)continue;
             if(candidate.id.equals(preferredId)){best=candidate;bestAvailability=availability;break;}
             if(best==null){best=candidate;bestAvailability=availability;}

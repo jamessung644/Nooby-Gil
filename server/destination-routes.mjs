@@ -114,6 +114,31 @@ function nearPolyline(value, coordinates, reference) {
   }
   return { distance, progress: total ? progress / total : 0 };
 }
+// Match an ordered sequence of reaches, not each stop's nearest/first occurrence:
+// the road may pass a later stop before returning to it after an earlier stop.
+function reachesInOrder(stops, coordinates, reference, radius) {
+  let segment = 1, progress = 0;
+  for (const stop of stops) {
+    const p = project(stop, reference);
+    let reached = false;
+    for (; segment < coordinates.length; segment++, progress = 0) {
+      const a = project(point(coordinates[segment - 1]), reference), b = project(point(coordinates[segment]), reference);
+      const ax = a.x - p.x, ay = a.y - p.y, dx = b.x - a.x, dy = b.y - a.y, lengthSquared = dx * dx + dy * dy;
+      if (lengthSquared === 0) {
+        if (ax * ax + ay * ay <= radius * radius) { reached = true; break; }
+        continue;
+      }
+      const center = -(ax * dx + ay * dy) / lengthSquared;
+      const closestX = ax + center * dx, closestY = ay + center * dy;
+      const margin = radius * radius - closestX * closestX - closestY * closestY;
+      if (margin < 0) continue;
+      const reach = Math.sqrt(margin / lengthSquared), entry = Math.max(progress, center - reach);
+      if (entry <= 1 && entry <= center + reach) { progress = entry; reached = true; break; }
+    }
+    if (!reached) return false;
+  }
+  return true;
+}
 function scenery(title) {
   // The prepared catalog exposes titles, not source classification. These are
   // conservative scene hints; road reachability and detour budgets are checked later.
@@ -279,7 +304,7 @@ async function roadRoute(origin, destination, waypoint, options) {
     || (!options.exactDestination && distanceMeters(destination, point(route.coordinates.at(-1))) > 1000)) {
     throw new ApiError('선택한 출발지·목적지에 맞는 도로 경로를 확인하지 못했습니다.', 502);
   }
-  if (via.some(stop => nearPolyline(stop, route.coordinates, origin).distance > (options.exactSelection ? 150 : 700))) return null;
+  if (!reachesInOrder(via, route.coordinates, origin, options.exactSelection ? 150 : 700)) return null;
   if (options.exactDestination && (distanceMeters(destination, point(route.coordinates.at(-1))) > 150
     || nearPolyline(destination, route.coordinates, origin).distance > 150)) return null;
   return { ...route, durationSeconds: data.routes[0].summary.duration };
@@ -415,8 +440,7 @@ export async function planDestinationRoutes(input, { env = process.env, fetchImp
     if (pair[1].progress - pair[0].progress >= 0.1 && distanceMeters(pair[0], pair[1]) >= 1000) {
       try {
         const route = await scenicRoad(pair);
-        if (route && withinBudget(route) && approaches(pair, route) && distinctPath(route)
-          && nearPolyline(pair[0], route.coordinates, origin).progress < nearPolyline(pair[1], route.coordinates, origin).progress) {
+        if (route && withinBudget(route) && approaches(pair, route) && distinctPath(route)) {
           const both = { stops: pair, route, stats: fastStats ? measure(route, scenery) : null };
           if (efficiency(both) > efficiency(best)) best = both;
         }

@@ -75,7 +75,7 @@ public final class RecapExperience {
         default String journeyId(){return "";}
         default String journeyTitle(){return "선택한 여정";}
     }
-    private static final int INK=0xff19332c,MUTED=0xff65766f,LINE=0xffdee7e1,SOFT=0xffeaf1ec,WHITE=0xffffffff,GREEN=0xff2c6656;
+    private static final int INK=ScenicDesign.INK,MUTED=ScenicDesign.MUTED,LINE=ScenicDesign.LINE,SOFT=ScenicDesign.SOFT,WHITE=ScenicDesign.SURFACE,ACCENT=ScenicDesign.ACCENT;
     private static final int MAX_FRAMES=6;
     private final Activity activity;
     private final Host host;
@@ -116,8 +116,8 @@ public final class RecapExperience {
     /** Returns a scrollable view on wide screens and a natural-height column otherwise. */
     public View createView(boolean wide) {
         if(destroyed)throw new IllegalStateException("Recap experience was destroyed");
-        this.wide=wide;active=true;stopPlayback();applyPendingVoice();
-        panel=column();panel.setPadding(dp(24),dp(24),dp(24),dp(28));panel.setBackground(background(WHITE,LINE,16));
+        this.wide=wide&&activity.getResources().getConfiguration().screenWidthDp>=840&&activity.getResources().getConfiguration().fontScale<1.3f;active=true;stopPlayback();applyPendingVoice();
+        panel=column();panel.setPadding(dp(wide?24:16),dp(24),dp(wide?24:16),dp(32));panel.setBackground(background(WHITE,LINE,ScenicDesign.CARD_RADIUS));
         if(wide){ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);scroll.addView(panel,new ScrollView.LayoutParams(-1,-2));root=scroll;}else root=panel;
         final View mounted=root;
         root.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener(){
@@ -244,18 +244,36 @@ public final class RecapExperience {
 
     private void renderPersonalClips(){
         List<PersonalVideoStore.Record> records=personalVideos.forMonth(month);if(records.isEmpty())return;
-        LinearLayout heading=row();heading.addView(text("내 영상 · "+records.size()+"개 / 선택 "+personalVideos.selected(month).size()+"개",18,INK,true),new LinearLayout.LayoutParams(0,-2,1));TextView auto=button("날짜별 장면 선택",false,()->{if(!allowed()||busy||saving||importing>0)return;personalVideos.selectAcrossDays(month);invalidateExport();render();});editingControls.add(auto);heading.addView(auto);panel.addView(heading);gap(panel,8);
-        panel.addView(text("최대 6개 · 각 1~8초 · 날짜순으로 이어 붙여요. 촬영일을 읽을 수 없으면 가져온 날짜로 분류해요.",12,MUTED,false));gap(panel,12);
-        mediaPage=Math.max(0,Math.min(mediaPage,(records.size()-1)/6));if(records.size()>6){LinearLayout pages=row();TextView previous=button("이전 영상",false,()->{if(!allowed()||busy||saving||importing>0)return;mediaPage=Math.max(0,mediaPage-1);render();});TextView next=button("다음 영상",false,()->{if(!allowed()||busy||saving||importing>0)return;mediaPage=Math.min((records.size()-1)/6,mediaPage+1);render();});pages.addView(previous,new LinearLayout.LayoutParams(0,-2,1));TextView page=text((mediaPage+1)+" / "+((records.size()+5)/6),14,MUTED,false);page.setGravity(Gravity.CENTER);pages.addView(page,size(70,-2));pages.addView(next,new LinearLayout.LayoutParams(0,-2,1));editingControls.add(previous);editingControls.add(next);panel.addView(pages);gap(panel,10);}
-        for(PersonalVideoStore.Record record:records.subList(mediaPage*6,Math.min(records.size(),mediaPage*6+6))){
-            LinearLayout card=column();card.setPadding(dp(14),dp(12),dp(14),dp(14));card.setBackground(background(SOFT,0,12));LinearLayout top=row();ImageView thumb=new ImageView(activity);thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);thumb.setImageBitmap(personalThumbnail(record));thumb.setContentDescription(record.title+" 가져온 영상의 첫 장면");top.addView(thumb,size(90,70));LinearLayout labels=column();labels.setPadding(dp(12),0,dp(10),0);labels.addView(text(record.title,15,INK,true));gap(labels,4);labels.addView(text(("media".equals(record.dateSource)?"촬영일 ":"import".equals(record.dateSource)?"가져온 날짜 ":"기록일 ")+new SimpleDateFormat("M월 d일",Locale.KOREA).format(new Date(record.createdAt))+" · 원본 "+seconds(record.durationMs)+"초",12,MUTED,false));if(!record.journeyTitle.isEmpty()){gap(labels,4);labels.addView(text(record.journeyTitle,12,GREEN,false));}top.addView(labels,new LinearLayout.LayoutParams(0,-2,1));Switch include=new Switch(activity);include.setText("포함");include.setTextColor(INK);include.setChecked(record.included);include.setMinHeight(dp(52));include.setOnCheckedChangeListener((view,checked)->{if(!allowed()||busy||saving||importing>0){view.setOnCheckedChangeListener(null);view.setChecked(record.included);return;}try{personalVideos.edit(record.id,record.startMs,record.endMs,checked);invalidateExport();render();}catch(IllegalArgumentException error){view.setOnCheckedChangeListener(null);view.setChecked(record.included);toast("한 편에 최대 6개를 선택할 수 있어요. 다른 장면을 제외해 주세요.");}});editingControls.add(include);top.addView(include);card.addView(top);gap(card,10);
-            LinearLayout actions=row();TextView trim=button(seconds(record.startMs)+"–"+seconds(record.endMs)+"초 · 구간 편집",false,()->editClip(record));actions.addView(trim,new LinearLayout.LayoutParams(0,-2,1.3f));editingControls.add(trim);TextView preview=button("구간 미리보기",false,()->previewClip(record));LinearLayout.LayoutParams space=new LinearLayout.LayoutParams(0,-2,1);space.setMargins(dp(7),0,dp(7),0);actions.addView(preview,space);editingControls.add(preview);TextView remove=button("목록에서 제거",false,()->removeClip(record));actions.addView(remove,new LinearLayout.LayoutParams(0,-2,1));editingControls.add(remove);card.addView(actions);panel.addView(card,size(-1,-2));gap(panel,10);
+        LinearLayout heading=wide?row():column();
+        heading.addView(text("내 영상 · "+records.size()+"개",20,INK,true),wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));
+        TextView auto=button("날짜별로 장면 선택",false,()->{if(!allowed()||busy||saving||importing>0)return;personalVideos.selectAcrossDays(month);invalidateExport();render();});
+        editingControls.add(auto);if(!wide)gap(heading,8);heading.addView(auto,wide?size(-2,-2):size(-1,-2));panel.addView(heading);gap(panel,8);
+        panel.addView(text("선택 "+personalVideos.selected(month).size()+" / 6개 · 각 1~8초 · 날짜순",14,ACCENT,true));gap(panel,8);
+        panel.addView(text("촬영일을 읽을 수 없는 영상은 가져온 날짜로 분류해요.",14,MUTED,false));gap(panel,16);
+        mediaPage=Math.max(0,Math.min(mediaPage,(records.size()-1)/6));
+        if(records.size()>6){
+            LinearLayout pages=row();TextView previous=button("이전 영상",false,()->{if(!allowed()||busy||saving||importing>0)return;mediaPage=Math.max(0,mediaPage-1);render();});
+            TextView next=button("다음 영상",false,()->{if(!allowed()||busy||saving||importing>0)return;mediaPage=Math.min((records.size()-1)/6,mediaPage+1);render();});
+            pages.addView(previous,new LinearLayout.LayoutParams(0,-2,1));TextView page=text((mediaPage+1)+" / "+((records.size()+5)/6),14,MUTED,false);page.setGravity(Gravity.CENTER);pages.addView(page,size(64,-2));pages.addView(next,new LinearLayout.LayoutParams(0,-2,1));editingControls.add(previous);editingControls.add(next);panel.addView(pages);gap(panel,16);
         }
-        gap(panel,10);
+        for(PersonalVideoStore.Record record:records.subList(mediaPage*6,Math.min(records.size(),mediaPage*6+6))){
+            LinearLayout card=column();card.setPadding(dp(16),dp(16),dp(16),dp(16));card.setBackground(background(SOFT,0,ScenicDesign.CARD_RADIUS));
+            LinearLayout top=row();ImageView thumb=new ImageView(activity);thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);thumb.setImageBitmap(personalThumbnail(record));thumb.setContentDescription(record.title+" 가져온 영상의 첫 장면");thumb.setBackground(background(SOFT,0,ScenicDesign.CONTROL_RADIUS));thumb.setClipToOutline(true);top.addView(thumb,size(wide?96:72,72));
+            LinearLayout labels=column();labels.setPadding(dp(16),0,wide?dp(16):0,0);labels.addView(text(record.title,16,INK,true));gap(labels,8);
+            labels.addView(text(("media".equals(record.dateSource)?"촬영일 ":"import".equals(record.dateSource)?"가져온 날짜 ":"기록일 ")+new SimpleDateFormat("M월 d일",Locale.KOREA).format(new Date(record.createdAt))+" · 원본 "+seconds(record.durationMs)+"초",14,MUTED,false));
+            if(!record.journeyTitle.isEmpty()){gap(labels,8);labels.addView(text(record.journeyTitle,14,ACCENT,false));}top.addView(labels,new LinearLayout.LayoutParams(0,-2,1));
+            Switch include=new Switch(activity);include.setText("리캡에 포함");include.setTextSize(16);include.setTypeface(ScenicTypography.font(activity,600));include.setTextColor(INK);include.setContentDescription(record.title+" 리캡에 포함");include.setChecked(record.included);include.setSwitchPadding(dp(16));include.setThumbTintList(ColorStateList.valueOf(WHITE));include.setTrackTintList(new ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{ACCENT,MUTED}));include.setMinHeight(dp(ScenicDesign.TOUCH_HEIGHT));
+            include.setOnCheckedChangeListener((view,checked)->{if(!allowed()||busy||saving||importing>0){view.setOnCheckedChangeListener(null);view.setChecked(record.included);return;}try{personalVideos.edit(record.id,record.startMs,record.endMs,checked);invalidateExport();render();}catch(IllegalArgumentException error){view.setOnCheckedChangeListener(null);view.setChecked(record.included);toast("한 편에 최대 6개를 선택할 수 있어요. 다른 장면을 제외해 주세요.");}});
+            editingControls.add(include);if(wide)top.addView(include);card.addView(top);gap(card,16);if(!wide){card.addView(include,size(-1,-2));gap(card,8);}
+            TextView trim=button(seconds(record.startMs)+"–"+seconds(record.endMs)+"초 · 구간 편집",false,()->editClip(record));
+            TextView preview=button("구간 미리보기",false,()->previewClip(record));TextView remove=button("목록에서 제거",false,()->removeClip(record));
+            editingControls.add(trim);editingControls.add(preview);editingControls.add(remove);addActions(card,trim,preview,remove);panel.addView(card,size(-1,-2));gap(panel,16);
+        }
+        gap(panel,8);
     }
 
     private void editClip(PersonalVideoStore.Record record){
-        if(!allowed()||busy||saving||importing>0)return;LinearLayout body=column();body.setPadding(dp(22),dp(20),dp(22),dp(20));body.addView(text(record.title,18,INK,true));gap(body,12);body.addView(text("시작·끝 시간을 초로 입력하세요. 원본은 바뀌지 않아요.\n1~8초 길이의 구간을 사용할 수 있어요.",14,MUTED,false));gap(body,12);EditText start=new EditText(activity),end=new EditText(activity);start.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);end.setInputType(start.getInputType());start.setHint("시작 (초)");end.setHint("끝 (초)");start.setText(seconds(record.startMs));end.setText(seconds(record.endMs));start.setContentDescription("영상 구간 시작 초");end.setContentDescription("영상 구간 끝 초");body.addView(start);body.addView(end);
+        if(!allowed()||busy||saving||importing>0)return;LinearLayout body=column();body.setPadding(dp(24),dp(24),dp(24),dp(24));body.addView(text(record.title,18,INK,true));gap(body,16);body.addView(text("시작·끝 시간을 초로 입력하세요. 원본은 바뀌지 않아요.\n1~8초 길이의 구간을 사용할 수 있어요.",14,MUTED,false));gap(body,16);EditText start=new EditText(activity),end=new EditText(activity);start.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);end.setInputType(start.getInputType());start.setHint("시작 (초)");end.setHint("끝 (초)");start.setText(seconds(record.startMs));end.setText(seconds(record.endMs));start.setContentDescription("영상 구간 시작 초");end.setContentDescription("영상 구간 끝 초");for(EditText field:new EditText[]{start,end}){field.setTextSize(16);field.setTextColor(INK);field.setHintTextColor(MUTED);field.setTypeface(ScenicTypography.font(activity,400));field.setMinHeight(dp(ScenicDesign.TOUCH_HEIGHT));}body.addView(text("시작 시간 (초)",16,INK,true));body.addView(start);gap(body,16);body.addView(text("끝 시간 (초)",16,INK,true));body.addView(end);
         dialog=new AlertDialog.Builder(activity).setView(body).setPositiveButton("구간 적용",null).setNegativeButton("취소",null).create();dialog.show();dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{if(!allowed())return;try{double a=Double.parseDouble(start.getText().toString()),b=Double.parseDouble(end.getText().toString());if(!Double.isFinite(a)||!Double.isFinite(b))throw new IllegalArgumentException();personalVideos.edit(record.id,Math.round(a*1000),Math.round(b*1000),record.included);dialog.dismiss();dialog=null;invalidateExport();render();}catch(IllegalArgumentException invalid){end.setError("원본 범위 안에서 1~8초 길이를 선택해 주세요.");}});
     }
 
@@ -264,7 +282,7 @@ public final class RecapExperience {
     }
 
     private void previewClip(PersonalVideoStore.Record record){
-        if(!allowed()||busy||saving||importing>0)return;stopPlayback();LinearLayout body=column();body.setPadding(dp(20),dp(18),dp(20),dp(18));body.addView(text("선택 구간 · "+seconds(record.startMs)+"–"+seconds(record.endMs)+"초",18,INK,true));gap(body,12);VideoView player=new VideoView(activity);video=player;body.addView(player,size(-1,320));gap(body,12);body.addView(button("닫기",true,this::stopPlayback),size(-1,-2));dialog=new AlertDialog.Builder(activity).setView(body).create();dialog.setOnDismissListener(d->{if(video==player){try{player.stopPlayback();}catch(RuntimeException ignored){}video=null;}dialog=null;});dialog.show();player.setOnPreparedListener(mp->{if(video!=player||!active||!host.canInteract()){stopPlayback();return;}mp.setVolume(0,0);player.seekTo((int)record.startMs);player.start();main.post(new Runnable(){public void run(){if(video!=player||!active||!host.canInteract()){if(video==player)stopPlayback();return;}if(player.getCurrentPosition()>=record.endMs){player.pause();return;}main.postDelayed(this,80);}});});player.setOnErrorListener((mp,a,b)->{if(video==player){stopPlayback();toast("원본 영상에 접근할 수 없어요. 파일을 다시 가져와 주세요.");}return true;});player.setVideoURI(Uri.parse(record.uri));
+        if(!allowed()||busy||saving||importing>0)return;stopPlayback();LinearLayout body=column();body.setPadding(dp(24),dp(24),dp(24),dp(24));body.addView(text("선택 구간 · "+seconds(record.startMs)+"–"+seconds(record.endMs)+"초",18,INK,true));gap(body,16);VideoView player=new VideoView(activity);video=player;body.addView(player,size(-1,320));gap(body,16);body.addView(button("닫기",true,this::stopPlayback),size(-1,-2));dialog=new AlertDialog.Builder(activity).setView(body).create();dialog.setOnDismissListener(d->{if(video==player){try{player.stopPlayback();}catch(RuntimeException ignored){}video=null;}dialog=null;});dialog.show();player.setOnPreparedListener(mp->{if(video!=player||!active||!host.canInteract()){stopPlayback();return;}mp.setVolume(0,0);player.seekTo((int)record.startMs);player.start();main.post(new Runnable(){public void run(){if(video!=player||!active||!host.canInteract()){if(video==player)stopPlayback();return;}if(player.getCurrentPosition()>=record.endMs){player.pause();return;}main.postDelayed(this,80);}});});player.setOnErrorListener((mp,a,b)->{if(video==player){stopPlayback();toast("원본 영상에 접근할 수 없어요. 파일을 다시 가져와 주세요.");}return true;});player.setVideoURI(Uri.parse(record.uri));
     }
 
     private void loadChoices(){
@@ -299,78 +317,80 @@ public final class RecapExperience {
         List<ScenicCaptureStore.Record> records=monthlyRecords();
         if(!records.isEmpty())sampleMode=false;
         if(!busy&&!saving)restoreExport();
-        TextView eyebrow=text("MONTHLY RECAP",12,GREEN,true);eyebrow.setLetterSpacing(.13f);panel.addView(eyebrow);gap(panel,8);
-        panel.addView(text("이번 달을 한 편으로",28,INK,true));gap(panel,7);
-        panel.addView(text("좋아한 풍경에 음악과 한 줄의 기억을 더해요.",15,MUTED,false));gap(panel,24);
+        TextView eyebrow=text("MONTHLY RECAP",12,ACCENT,true);eyebrow.setLetterSpacing(.13f);panel.addView(eyebrow);gap(panel,8);
+        panel.addView(text("이번 달을 한 편으로",28,INK,true));gap(panel,8);
+        panel.addView(text("내 영상과 풍경을 모아, 한 달의 리캡을 만들어요.",15,MUTED,false));gap(panel,24);
         LinearLayout selector=row();selector.setGravity(Gravity.CENTER_VERTICAL);
         List<String> months=months();int index=months.indexOf(month);
-        TextView previous=button("‹",false,()->selectAdjacent(1));previous.setContentDescription("이전 달 선택");previous.setTextSize(28);selector.addView(previous,size(56,56));
-        TextView monthButton=button(monthLabel(month)+"  ▾",false,this::showMonths);LinearLayout.LayoutParams monthParams=new LinearLayout.LayoutParams(0,dp(56),1);monthParams.setMargins(dp(10),0,dp(10),0);selector.addView(monthButton,monthParams);
-        TextView next=button("›",false,()->selectAdjacent(-1));next.setContentDescription("다음 달 선택");next.setTextSize(28);selector.addView(next,size(56,56));
+        TextView previous=button("이전",false,()->selectAdjacent(1));previous.setContentDescription("이전 달 선택");previous.setPadding(dp(8),dp(16),dp(8),dp(16));selector.addView(previous,size(64,-2));
+        TextView monthButton=button(monthLabel(month),false,this::showMonths);LinearLayout.LayoutParams monthParams=new LinearLayout.LayoutParams(0,-2,1);monthParams.setMargins(dp(8),0,dp(8),0);selector.addView(monthButton,monthParams);
+        TextView next=button("다음",false,()->selectAdjacent(-1));next.setContentDescription("다음 달 선택");next.setPadding(dp(8),dp(16),dp(8),dp(16));selector.addView(next,size(64,-2));
         previous.setEnabled(index>=0&&index<months.size()-1&&!busy&&!saving);next.setEnabled(index>0&&!busy&&!saving);
         previous.setAlpha(previous.isEnabled()?1:.35f);next.setAlpha(next.isEnabled()?1:.35f);editingControls.add(monthButton);
         panel.addView(selector,size(-1,-2));gap(panel,24);
 
-        LinearLayout mediaActions=row();TextView add=button("내 영상 가져오기",true,this::pickVideos);mediaActions.addView(add,new LinearLayout.LayoutParams(0,-2,1));editingControls.add(add);TextView mode=button(personalMode?"샘플 사진으로 전환":"내 영상으로 전환",false,()->{if(!allowed()||busy||saving||importing>0)return;personalMode=!personalMode;prefs.edit().putBoolean("personal_mode_"+month,personalMode).apply();sampleMode=!personalMode&&monthlyRecords().isEmpty();invalidateExport();render();});LinearLayout.LayoutParams modeParams=new LinearLayout.LayoutParams(0,-2,1);modeParams.setMargins(dp(8),0,0,0);mediaActions.addView(mode,modeParams);editingControls.add(mode);panel.addView(mediaActions,size(-1,-2));gap(panel,8);panel.addView(text(importing>0?"가져온 영상의 길이와 중복 여부를 확인하고 있어요…":"원본 영상은 변경하지 않아요. 같은 내용의 파일은 중복으로 추가하지 않아요.",12,MUTED,false));gap(panel,18);
+        TextView add=button("내 영상 가져오기",true,this::pickVideos);editingControls.add(add);
+        TextView mode=button(personalMode?"샘플 사진으로 전환":"내 영상으로 전환",false,()->{if(!allowed()||busy||saving||importing>0)return;personalMode=!personalMode;prefs.edit().putBoolean("personal_mode_"+month,personalMode).apply();sampleMode=!personalMode&&monthlyRecords().isEmpty();invalidateExport();render();});editingControls.add(mode);
+        addActions(panel,add,mode);gap(panel,8);
+        panel.addView(text(importing>0?"영상의 길이와 중복 여부를 확인하고 있어요…":"원본은 그대로 보관하고, 중복 영상은 한 번만 추가해요.",14,MUTED,false));gap(panel,24);
         if(personalMode){renderPersonalClips();if(personalVideos.forMonth(month).isEmpty()){renderEmpty();return;}}else if(records.isEmpty()&&!sampleMode){renderEmpty();return;}
-        LinearLayout provenance=column();provenance.setPadding(dp(16),dp(16),dp(16),dp(16));provenance.setBackground(background(SOFT,LINE,16));
-        provenance.addView(text(personalMode?"내 영상 리캡 · 선택 "+personalVideos.selected(month).size()+"개":sampleMode?"샘플 리캡 체험":"저장한 데모 장면 "+records.size()+"개",14,GREEN,true));gap(provenance,4);
+        LinearLayout provenance=column();provenance.setPadding(dp(16),dp(16),dp(16),dp(16));provenance.setBackground(background(SOFT,LINE,ScenicDesign.CARD_RADIUS));
+        provenance.addView(text(personalMode?"내 영상 리캡 · 선택 "+personalVideos.selected(month).size()+"개":sampleMode?"샘플 리캡 체험":"저장한 데모 장면 "+records.size()+"개",14,ACCENT,true));gap(provenance,4);
         provenance.addView(text(personalMode?"선택한 구간을 실제 움직이는 영상으로 만들어요. 원본 소리는 합성 배경음악으로 바꿔요.":sampleMode?"공개 사진 3장으로 체험해요. 실제 나의 주행 기록은 아니에요.":"저장한 장면은 샘플 사진이에요. 실제 차량 촬영이나 다른 운전자의 영상이 아니에요.",13,MUTED,false));
         panel.addView(provenance,size(-1,-2));gap(panel,24);
 
         LinearLayout layout=wide?row():column();layout.setGravity(Gravity.TOP);
-        View poster=poster(records);int posterWidth=wide?218:208;
-        LinearLayout.LayoutParams posterParams=size(posterWidth,Math.round(posterWidth*16f/9f));
+        View poster=poster(records);int availableWidth=Math.max(160,activity.getResources().getConfiguration().screenWidthDp-112);int posterWidth=wide?216:Math.min(208,availableWidth);
+        LinearLayout.LayoutParams posterParams=size(posterWidth,Math.round(posterWidth*16f/9f*Math.max(1f,activity.getResources().getConfiguration().fontScale)));
         if(!wide)posterParams.gravity=Gravity.CENTER_HORIZONTAL;
         layout.addView(poster,posterParams);
         LinearLayout details=column();LinearLayout.LayoutParams detailsParams=wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2);
-        if(wide)detailsParams.setMargins(dp(24),0,0,0);else detailsParams.setMargins(0,dp(22),0,0);layout.addView(details,detailsParams);
-        details.addView(text("영상에 담을 장면",18,INK,true));gap(details,6);
-        details.addView(text(personalMode?"선택한 영상 구간 "+personalVideos.selected(month).size()+"개 · 날짜순으로 이어 붙여요.":sampleMode?"해운대 · 광안리 · 청사포의 공개 사진":records.size()>MAX_FRAMES?"이번 달 저장한 장면 중 최근 "+MAX_FRAMES+"개를 사용해요.":"이 달에 저장한 "+records.size()+"개의 데모 장면을 사용해요.",13,MUTED,false));gap(details,12);
+        if(wide)detailsParams.setMargins(dp(24),0,0,0);else detailsParams.setMargins(0,dp(24),0,0);layout.addView(details,detailsParams);
+        details.addView(text("영상에 담을 장면",18,INK,true));gap(details,8);
+        details.addView(text(personalMode?"선택한 영상 구간 "+personalVideos.selected(month).size()+"개 · 날짜순으로 이어 붙여요.":sampleMode?"해운대 · 광안리 · 청사포의 공개 사진":records.size()>MAX_FRAMES?"이번 달 저장한 장면 중 최근 "+MAX_FRAMES+"개를 사용해요.":"이 달에 저장한 "+records.size()+"개의 데모 장면을 사용해요.",13,MUTED,false));gap(details,16);
         LinearLayout thumbnails=row();List<String> keys=new ArrayList<>();
         if(!personalMode&&sampleMode)Collections.addAll(keys,"haeundae","gwangalli","coast");else if(!personalMode)for(int i=0;i<Math.min(MAX_FRAMES,records.size());i++)keys.add(imageKey(records.get(i).imageKey));
-        for(String key:keys){ImageView thumbnail=new ImageView(activity);thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);thumbnail.setImageBitmap(bitmap(key));thumbnail.setContentDescription(location(key)+" 샘플 사진");thumbnail.setBackground(background(SOFT,0,8));thumbnail.setClipToOutline(true);LinearLayout.LayoutParams thumb=new LinearLayout.LayoutParams(0,dp(58),1);thumb.setMargins(0,0,dp(6),0);thumbnails.addView(thumbnail,thumb);}if(!personalMode)details.addView(thumbnails,size(-1,58));gap(details,19);
-        details.addView(text("어떤 분위기로 남길까요?",17,INK,true));gap(details,10);
-        LinearLayout moods=row();addMood(moods,"lake","잔잔한 오후");addMood(moods,"sea","산뜻한 바다");addMood(moods,"night","도시의 밤");details.addView(moods,size(-1,-2));gap(details,5);
-        details.addView(text("앱에서 만든 오리지널 음악을 영상에 함께 담아요.",12,MUTED,false));gap(details,18);
+        for(String key:keys){ImageView thumbnail=new ImageView(activity);thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);thumbnail.setImageBitmap(bitmap(key));thumbnail.setContentDescription(location(key)+" 샘플 사진");thumbnail.setBackground(background(SOFT,0,8));thumbnail.setClipToOutline(true);LinearLayout.LayoutParams thumb=new LinearLayout.LayoutParams(0,dp(58),1);thumb.setMargins(0,0,dp(8),0);thumbnails.addView(thumbnail,thumb);}if(!personalMode)details.addView(thumbnails,size(-1,58));gap(details,24);
+        details.addView(text("배경음악",17,INK,true));gap(details,8);
+        LinearLayout moods=wide?row():column();addMood(moods,"lake","잔잔한 오후");addMood(moods,"sea","산뜻한 바다");addMood(moods,"night","도시의 밤");details.addView(moods,size(-1,-2));gap(details,8);
+        details.addView(text("앱에서 만든 배경음악을 영상에 담아요.",12,MUTED,false));gap(details,24);
         details.addView(text("기억하고 싶은 한 줄",17,INK,true));gap(details,8);
-        captionEditor=new EditText(activity);captionEditor.setTextSize(15);captionEditor.setTextColor(INK);captionEditor.setHintTextColor(MUTED);captionEditor.setTypeface(ScenicTypography.font(activity,400));captionEditor.setGravity(Gravity.TOP);captionEditor.setMinLines(2);captionEditor.setMaxLines(3);captionEditor.setFilters(new InputFilter[]{new InputFilter.LengthFilter(60)});captionEditor.setPadding(dp(14),dp(12),dp(14),dp(12));captionEditor.setBackground(background(WHITE,LINE,10));captionEditor.setText(caption);captionEditor.setHint("예: 바다를 보며 오래 웃었던 오후");captionEditor.setContentDescription("영상에 넣을 기억 메모. 최대 60자");editingControls.add(captionEditor);
+        captionEditor=new EditText(activity);captionEditor.setTextSize(16);captionEditor.setTextColor(INK);captionEditor.setHintTextColor(MUTED);captionEditor.setTypeface(ScenicTypography.font(activity,400));captionEditor.setGravity(Gravity.TOP);captionEditor.setMinLines(2);captionEditor.setMaxLines(3);captionEditor.setFilters(new InputFilter[]{new InputFilter.LengthFilter(60)});captionEditor.setPadding(dp(16),dp(16),dp(16),dp(16));captionEditor.setBackground(background(WHITE,LINE,ScenicDesign.CONTROL_RADIUS));captionEditor.setText(caption);captionEditor.setHint("예: 바다를 보며 오래 웃었던 오후");captionEditor.setContentDescription("영상에 넣을 기억 메모. 최대 60자");editingControls.add(captionEditor);
         captionEditor.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){caption=s.toString();prefs.edit().putString("caption_"+month,caption).apply();invalidateExport();if(posterCaption!=null)posterCaption.setText(displayCaption());updateControls();}public void afterTextChanged(Editable e){}});
-        details.addView(captionEditor,size(-1,-2));gap(details,5);details.addView(text("최대 60자 · 이 기기에 저장하고 영상에 자막으로 넣어요.",12,MUTED,false));gap(details,9);
-        TextView voice=button("음성으로 메모",false,this::requestVoice);details.addView(voice,size(-1,-2));editingControls.add(voice);gap(details,5);
-        details.addView(text("누르면 설치된 음성 입력 앱이 열려요. 음성은 해당 제공자가 처리할 수 있어요.",12,MUTED,false));gap(details,19);
-        generateButton=button(exportedFile==null?"음악을 입혀 리캡 만들기":"새 리캡 만들기",true,this::generate);details.addView(generateButton,size(-1,-2));gap(details,8);
+        details.addView(captionEditor,size(-1,-2));gap(details,8);details.addView(text("최대 60자 · 이 기기에 저장하고 영상에 자막으로 넣어요.",12,MUTED,false));gap(details,8);
+        TextView voice=button("음성으로 메모",false,this::requestVoice);details.addView(voice,size(-1,-2));editingControls.add(voice);gap(details,8);
+        details.addView(text("누르면 설치된 음성 입력 앱이 열려요. 음성은 해당 제공자가 처리할 수 있어요.",12,MUTED,false));gap(details,24);
+        generateButton=button(exportedFile==null?"리캡 만들기":"새 리캡 만들기",true,this::generate);details.addView(generateButton,size(-1,-2));gap(details,8);
         TextView format=text("세로 9:16  ·  약 "+Math.round(RecapVideoExporter.durationSeconds(frames()))+"초  ·  "+(personalMode?"움직이는 영상과 음악":"사진과 음악"),12,MUTED,false);format.setGravity(Gravity.CENTER);details.addView(format,size(-1,-2));
         panel.addView(layout,size(-1,-2));gap(panel,24);
-        progressView=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);progressView.setMax(100);progressView.setProgressTintList(ColorStateList.valueOf(GREEN));panel.addView(progressView,size(-1,5));gap(panel,9);
-        statusView=text(status.isEmpty()?(exportedFile!=null?"리캡이 준비됐어요. 재생하거나 동영상으로 저장해 보세요.":"장면과 음악을 골랐으면 나만의 한 줄을 더해 보세요."):status,14,MUTED,false);statusView.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);panel.addView(statusView);gap(panel,12);
-        LinearLayout actions=row();playButton=button("리캡 재생",false,this::play);saveButton=button(savedUri==null?"동영상 저장":"저장 완료",false,this::saveToGallery);
-        LinearLayout.LayoutParams actionA=new LinearLayout.LayoutParams(0,-2,1);actionA.setMargins(0,0,dp(8),0);actions.addView(playButton,actionA);actions.addView(saveButton,new LinearLayout.LayoutParams(0,-2,1));panel.addView(actions,size(-1,-2));gap(panel,18);
-        TextView sources=button(personalMode?"영상과 음악 정보":"사진 출처와 음악 정보",false,this::showSources);panel.addView(sources,size(-1,-2));editingControls.add(sources);gap(panel,7);
+        progressView=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);progressView.setMax(100);progressView.setProgressTintList(ColorStateList.valueOf(ACCENT));panel.addView(progressView,size(-1,5));gap(panel,8);
+        statusView=text(status.isEmpty()?(exportedFile!=null?"리캡이 준비됐어요. 재생하거나 동영상으로 저장해 보세요.":"장면과 음악을 골랐으면 나만의 한 줄을 더해 보세요."):status,14,MUTED,false);statusView.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);panel.addView(statusView);gap(panel,16);
+        playButton=button("리캡 재생",false,this::play);saveButton=button(savedUri==null?"동영상 저장":"저장 완료",false,this::saveToGallery);
+        addActions(panel,playButton,saveButton);gap(panel,24);
+        TextView sources=button(personalMode?"영상과 음악 정보":"사진 출처와 음악 정보",false,this::showSources);panel.addView(sources,size(-1,-2));editingControls.add(sources);gap(panel,8);
         panel.addView(text(personalMode?"가져온 영상은 기기에서만 처리해요. 원본 소리는 리캡에 포함하지 않으며 외부 서버에 전송하지 않아요.":"샘플 사진의 출처와 라이선스는 영상 마지막 장면에도 표시해요. 공개 공유 서버로 전송하지 않아요.",12,MUTED,false));updateControls();
     }
 
     private void renderEmpty(){
-        LinearLayout empty=column();empty.setGravity(Gravity.CENTER_HORIZONTAL);empty.setPadding(dp(28),dp(34),dp(28),dp(32));empty.setBackground(background(SOFT,0,18));
-        TextView icon=text("▤",40,GREEN,false);empty.addView(icon);gap(empty,15);
-        TextView title=text("아직 저장한 장면이 없어요",21,INK,true);title.setGravity(Gravity.CENTER);empty.addView(title);gap(empty,9);
-        TextView message=text("풍경 기록에 장면을 남기면\n이곳에서 한 달의 리캡을 만들 수 있어요.",15,MUTED,false);message.setGravity(Gravity.CENTER);empty.addView(message);gap(empty,22);
-        TextView sample=button("샘플 리캡 체험",true,()->{if(!allowed())return;sampleMode=true;personalMode=false;prefs.edit().putBoolean("personal_mode_"+month,false).apply();status="공개 사진으로 체험 중이에요. 나의 주행 이력에는 추가하지 않아요.";render();});empty.addView(sample,size(-1,-2));editingControls.add(sample);gap(empty,9);
-        TextView records=button("풍경 기록으로",false,()->{if(allowed())host.onOpenRecords();});empty.addView(records,size(-1,-2));editingControls.add(records);gap(empty,12);
+        LinearLayout empty=column();empty.setGravity(Gravity.CENTER_HORIZONTAL);empty.setPadding(dp(24),dp(32),dp(24),dp(32));empty.setBackground(background(SOFT,0,ScenicDesign.CARD_RADIUS));
+        TextView title=text(personalMode?"이 달에 가져온 영상이 없어요":"아직 저장한 장면이 없어요",22,INK,true);title.setGravity(Gravity.CENTER);empty.addView(title);gap(empty,8);
+        TextView message=text(personalMode?"내 영상을 가져오거나 샘플 사진으로 먼저 체험해 보세요.":"풍경 기록에 장면을 남기거나 샘플 사진으로 먼저 체험해 보세요.",16,MUTED,false);message.setGravity(Gravity.CENTER);empty.addView(message);gap(empty,24);
+        TextView sample=button("샘플 리캡 체험",true,()->{if(!allowed())return;sampleMode=true;personalMode=false;prefs.edit().putBoolean("personal_mode_"+month,false).apply();status="공개 사진으로 체험 중이에요. 나의 주행 이력에는 추가하지 않아요.";render();});empty.addView(sample,size(-1,-2));editingControls.add(sample);gap(empty,8);
+        TextView records=button("풍경 기록으로",false,()->{if(allowed())host.onOpenRecords();});empty.addView(records,size(-1,-2));editingControls.add(records);gap(empty,16);
         TextView note=text("공개 사진으로 먼저 체험할 수 있어요.\n실제 촬영 기록을 만들거나 추가하지 않아요.",12,MUTED,false);note.setGravity(Gravity.CENTER);empty.addView(note);panel.addView(empty,size(-1,-2));updateControls();
     }
 
     private View poster(List<ScenicCaptureStore.Record> records){
         String key=records.isEmpty()?"gwangalli":imageKey(records.get(0).imageKey);
-        FrameLayout frame=new FrameLayout(activity);frame.setBackground(background(INK,0,18));frame.setClipToOutline(true);frame.setContentDescription(personalMode?"가져온 영상의 세로 리캡 미리보기":"9대16 샘플 리캡 미리보기. 실제 차량 촬영 아님.");
+        FrameLayout frame=new FrameLayout(activity);frame.setBackground(background(ScenicDesign.HERO,0,ScenicDesign.CARD_RADIUS));frame.setClipToOutline(true);frame.setContentDescription(personalMode?"가져온 영상의 세로 리캡 미리보기":"9대16 샘플 리캡 미리보기. 실제 차량 촬영 아님.");
         ImageView photo=new ImageView(activity);photo.setImageBitmap(personalMode?personalPoster():bitmap(key));photo.setScaleType(ImageView.ScaleType.CENTER_CROP);frame.addView(photo,new FrameLayout.LayoutParams(-1,-1));
-        View scrim=new View(activity);scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x251c2924,0x001c2924,0xe51c2924}));frame.addView(scrim,new FrameLayout.LayoutParams(-1,-1));
-        TextView tag=text(personalMode?"내 영상  ·  9:16":"샘플 리캡  ·  9:16",11,WHITE,true);tag.setPadding(dp(10),dp(7),dp(10),dp(7));tag.setBackground(background(0x88352947,0,20));FrameLayout.LayoutParams tagParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.START);tagParams.setMargins(dp(14),dp(16),dp(12),0);frame.addView(tag,tagParams);
-        LinearLayout labels=column();labels.setPadding(dp(18),0,dp(18),dp(20));TextView brand=text("SCENIC",12,0xffd9e7da,true);brand.setLetterSpacing(.14f);labels.addView(brand);gap(labels,8);labels.addView(text(monthLabel(month),22,WHITE,true));gap(labels,7);posterCaption=text(displayCaption(),14,WHITE,false);posterCaption.setMaxLines(4);labels.addView(posterCaption);gap(labels,13);labels.addView(text(personalMode?"사용자가 가져온 영상":"공개 사진 · 실제 주행 영상 아님",10,0xffe1e8e1,false));FrameLayout.LayoutParams labelParams=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);frame.addView(labels,labelParams);return frame;
+        View scrim=new View(activity);scrim.setBackgroundColor((ScenicDesign.HERO&0x00ffffff)|0x33000000);frame.addView(scrim,new FrameLayout.LayoutParams(-1,-1));
+        TextView tag=text(personalMode?"내 영상  ·  9:16":"샘플 리캡  ·  9:16",11,WHITE,true);tag.setPadding(dp(8),dp(8),dp(8),dp(8));tag.setBackground(background(ScenicDesign.HERO,0,ScenicDesign.CONTROL_RADIUS));FrameLayout.LayoutParams tagParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.START);tagParams.setMargins(dp(16),dp(16),dp(16),0);frame.addView(tag,tagParams);
+        LinearLayout labels=column();labels.setPadding(dp(16),dp(16),dp(16),dp(24));labels.setBackgroundColor(ScenicDesign.HERO);TextView brand=text("SCENIC",12,ScenicDesign.HERO_MUTED,true);brand.setLetterSpacing(.14f);labels.addView(brand);gap(labels,8);labels.addView(text(monthLabel(month),22,WHITE,true));gap(labels,8);posterCaption=text(displayCaption(),14,WHITE,false);posterCaption.setMaxLines(4);labels.addView(posterCaption);gap(labels,16);labels.addView(text(personalMode?"사용자가 가져온 영상":"공개 사진 · 실제 주행 영상 아님",12,ScenicDesign.HERO_MUTED,false));FrameLayout.LayoutParams labelParams=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);frame.addView(labels,labelParams);return frame;
     }
 
     private void addMood(LinearLayout row,String key,String label){
-        TextView option=button(label,key.equals(mood),()->{if(!allowed()||busy||saving||importing>0)return;mood=key;prefs.edit().putString("mood_"+month,mood).apply();invalidateExport();render();});option.setTextSize(13);option.setPadding(dp(6),dp(13),dp(6),dp(13));LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(0,-2,1);params.setMargins(0,0,dp(5),0);row.addView(option,params);editingControls.add(option);
+        TextView option=button(label,key.equals(mood),()->{if(!allowed()||busy||saving||importing>0)return;mood=key;prefs.edit().putString("mood_"+month,mood).apply();invalidateExport();render();});option.setSelected(key.equals(mood));option.setPadding(dp(8),dp(16),dp(8),dp(16));LinearLayout.LayoutParams params=wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2);if(row.getChildCount()>0)params.setMargins(wide?dp(8):0,wide?0:dp(8),0,0);row.addView(option,params);editingControls.add(option);
     }
 
     private void selectAdjacent(int offset){if(!allowed()||busy||saving||importing>0)return;List<String> months=months();int next=months.indexOf(month)+offset;if(next>=0&&next<months.size())selectMonth(months.get(next));}
@@ -405,8 +425,8 @@ public final class RecapExperience {
 
     private void play(){
         if(!allowed()||busy||saving||exportedFile==null||!exportedFile.isFile())return;stopPlayback();
-        LinearLayout body=column();body.setPadding(dp(20),dp(18),dp(20),dp(18));body.setBackgroundColor(WHITE);body.addView(text(monthLabel(month)+(personalMode?" · 나의 리캡":" · 샘플 리캡"),20,INK,true));gap(body,5);body.addView(text(personalMode?"가져온 영상과 합성 음악으로 만든 리캡":"공개 사진으로 만든 영상 · 실제 차량 촬영 아님",12,MUTED,false));gap(body,12);
-        int height=Math.max(dp(180),Math.min(dp(450),activity.getResources().getDisplayMetrics().heightPixels-dp(220)));FrameLayout stage=new FrameLayout(activity);stage.setBackgroundColor(INK);video=new VideoView(activity);final VideoView player=video;player.setAudioFocusRequest(AudioManager.AUDIOFOCUS_GAIN);FrameLayout.LayoutParams videoParams=new FrameLayout.LayoutParams(Math.round(height*9f/16f),height,Gravity.CENTER);stage.addView(player,videoParams);body.addView(stage,new LinearLayout.LayoutParams(-1,height));gap(body,12);
+        LinearLayout body=column();body.setPadding(dp(24),dp(24),dp(24),dp(24));body.setBackgroundColor(WHITE);body.addView(text(monthLabel(month)+(personalMode?" · 나의 리캡":" · 샘플 리캡"),20,INK,true));gap(body,8);body.addView(text(personalMode?"가져온 영상과 합성 음악으로 만든 리캡":"공개 사진으로 만든 영상 · 실제 차량 촬영 아님",12,MUTED,false));gap(body,16);
+        int height=Math.max(dp(180),Math.min(dp(450),activity.getResources().getDisplayMetrics().heightPixels-dp(220)));FrameLayout stage=new FrameLayout(activity);stage.setBackgroundColor(INK);video=new VideoView(activity);final VideoView player=video;player.setAudioFocusRequest(AudioManager.AUDIOFOCUS_GAIN);FrameLayout.LayoutParams videoParams=new FrameLayout.LayoutParams(Math.round(height*9f/16f),height,Gravity.CENTER);stage.addView(player,videoParams);body.addView(stage,new LinearLayout.LayoutParams(-1,height));gap(body,16);
         TextView toggle=button("일시정지",false,()->{if(!allowed())return;if(video!=player)return;if(player.isPlaying()){player.pause();}else player.start();});body.addView(toggle,size(-1,-2));gap(body,8);body.addView(button("닫기",true,this::stopPlayback),size(-1,-2));
         dialog=new AlertDialog.Builder(activity).setView(body).create();dialog.setOnDismissListener(dlg->{if(video==player){try{player.stopPlayback();}catch(RuntimeException ignored){}video=null;}dialog=null;});dialog.show();Window window=dialog.getWindow();if(window!=null)window.setLayout(Math.min(dp(540),activity.getResources().getDisplayMetrics().widthPixels-dp(36)),-2);
         toggle.setOnClickListener(v->{if(!allowed()||video!=player)return;if(player.isPlaying()){player.pause();toggle.setText("이어 재생");}else{player.start();toggle.setText("일시정지");}});
@@ -435,13 +455,13 @@ public final class RecapExperience {
     private void showSources(){
         if(!allowed())return;String attribution;
         try(InputStream input=activity.getAssets().open("scenic-demo/ATTRIBUTION.txt");ByteArrayOutputStream bytes=new ByteArrayOutputStream()){byte[] block=new byte[2048];int read;while((read=input.read(block))!=-1)bytes.write(block,0,read);attribution=new String(bytes.toByteArray(),StandardCharsets.UTF_8);}catch(Exception unavailable){attribution=credit("haeundae")+"\n"+credit("gwangalli")+"\n"+credit("coast");}
-        LinearLayout body=column();body.setPadding(dp(22),dp(20),dp(22),dp(20));body.addView(text("사진 출처와 음악",22,INK,true));gap(body,12);body.addView(text(personalMode?"가져온 영상에서 선택한 구간을 세로 화면에 맞춰 잘라 실제 움직이는 리캡을 만들어요. 원본 소리는 넣지 않고 앱에서 합성한 음악을 사용합니다. 원본 영상은 변경하거나 업로드하지 않아요.":"리캡은 공개 사진을 세로 화면에 맞춰 자르고 자막을 더한 영상이에요. 실제 차량이나 다른 운전자의 촬영물이 아니에요.\n\n배경음악은 선택한 분위기에 맞춰 앱 안에서 합성한 오리지널 사운드예요. 외부 음원이나 음악 서비스는 사용하지 않아요.",14,INK,false));gap(body,18);TextView sources=text(personalMode?"영상: 사용자가 직접 선택한 파일\n음악: SCENIC 오리지널 신시사이저\n목록에서 제거해도 원본 파일과 갤러리의 리캡은 유지됩니다.":attribution,12,MUTED,false);sources.setTextIsSelectable(true);body.addView(sources);ScrollView scroll=new ScrollView(activity);scroll.addView(body);dialog=new AlertDialog.Builder(activity).setView(scroll).setPositiveButton("확인",null).create();dialog.show();
+        LinearLayout body=column();body.setPadding(dp(24),dp(24),dp(24),dp(24));body.addView(text(personalMode?"영상과 음악 정보":"사진 출처와 음악",22,INK,true));gap(body,16);body.addView(text(personalMode?"가져온 영상에서 선택한 구간을 세로 화면에 맞춰 잘라 실제 움직이는 리캡을 만들어요. 원본 소리는 넣지 않고 앱에서 합성한 음악을 사용합니다. 원본 영상은 변경하거나 업로드하지 않아요.":"리캡은 공개 사진을 세로 화면에 맞춰 자르고 자막을 더한 영상이에요. 실제 차량이나 다른 운전자의 촬영물이 아니에요.\n\n배경음악은 선택한 분위기에 맞춰 앱 안에서 합성한 오리지널 사운드예요. 외부 음원이나 음악 서비스는 사용하지 않아요.",14,INK,false));gap(body,24);TextView sources=text(personalMode?"영상: 사용자가 직접 선택한 파일\n음악: SCENIC 오리지널 신시사이저\n목록에서 제거해도 원본 파일과 갤러리의 리캡은 유지됩니다.":attribution,12,MUTED,false);sources.setTextIsSelectable(true);body.addView(sources);ScrollView scroll=new ScrollView(activity);scroll.addView(body);dialog=new AlertDialog.Builder(activity).setView(scroll).setPositiveButton("확인",null).create();dialog.show();
     }
 
     private void updateControls(){
         boolean enabled=active&&!destroyed&&host.canInteract()&&!busy&&!saving&&importing==0;
         for(View control:editingControls){control.setEnabled(enabled);control.setAlpha(enabled?1:.5f);}
-        if(generateButton!=null){generateButton.setEnabled(enabled&&!frames().isEmpty());generateButton.setAlpha(generateButton.isEnabled()?1:.55f);generateButton.setText(busy?"리캡 만드는 중  "+progress+"%":exportedFile==null?"음악을 입혀 리캡 만들기":"새 리캡 만들기");}
+        if(generateButton!=null){generateButton.setEnabled(enabled&&!frames().isEmpty());generateButton.setAlpha(generateButton.isEnabled()?1:.55f);generateButton.setText(busy?"리캡 만드는 중  "+progress+"%":exportedFile==null?"리캡 만들기":"새 리캡 만들기");}
         if(playButton!=null){playButton.setEnabled(enabled&&exportedFile!=null);playButton.setAlpha(playButton.isEnabled()?1:.4f);}
         if(saveButton!=null){saveButton.setEnabled(enabled&&exportedFile!=null&&savedUri==null);saveButton.setAlpha(saveButton.isEnabled()?1:.4f);saveButton.setText(saving?"저장 중…":savedUri!=null?"저장 완료":"동영상 저장");}
         if(progressView!=null){progressView.setVisibility(busy?View.VISIBLE:View.GONE);progressView.setProgress(progress);}
@@ -478,11 +498,12 @@ public final class RecapExperience {
     private Bitmap bitmap(String key){if(bitmaps.containsKey(key))return bitmaps.get(key);try(InputStream input=activity.getAssets().open("scenic-demo/"+imageKey(key)+".jpg")){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=2;options.inPreferredConfig=Bitmap.Config.RGB_565;Bitmap bitmap=BitmapFactory.decodeStream(input,null,options);bitmaps.put(key,bitmap);return bitmap;}catch(Exception unavailable){return null;}}
     private int dp(float value){return Math.round(value*activity.getResources().getDisplayMetrics().density);}
     private LinearLayout column(){LinearLayout view=new LinearLayout(activity);view.setOrientation(LinearLayout.VERTICAL);return view;}
-    private LinearLayout row(){LinearLayout view=new LinearLayout(activity);view.setOrientation(LinearLayout.HORIZONTAL);return view;}
+    private LinearLayout row(){LinearLayout view=new LinearLayout(activity);view.setOrientation(LinearLayout.HORIZONTAL);view.setGravity(Gravity.CENTER_VERTICAL);return view;}
+    private void addActions(LinearLayout parent,TextView... buttons){LinearLayout actions=wide?row():column();for(TextView button:buttons){LinearLayout.LayoutParams params=wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2);if(actions.getChildCount()>0)params.setMargins(wide?dp(8):0,wide?0:dp(8),0,0);actions.addView(button,params);}parent.addView(actions,size(-1,-2));}
     private LinearLayout.LayoutParams size(int width,int height){return new LinearLayout.LayoutParams(width<0?width:dp(width),height<0?height:dp(height));}
     private void gap(LinearLayout parent,int height){parent.addView(new View(activity),size(1,height));}
     private GradientDrawable background(int color,int stroke,int radius){GradientDrawable shape=new GradientDrawable();shape.setColor(color);shape.setCornerRadius(dp(radius));if(stroke!=0)shape.setStroke(dp(1),stroke);return shape;}
-    private TextView text(String value,int sp,int color,boolean bold){TextView text=new TextView(activity);text.setText(value);text.setTextSize(sp);text.setTextColor(color);text.setTypeface(ScenicTypography.font(activity,bold?600:400));text.setIncludeFontPadding(false);text.setLineSpacing(dp(3),1);return text;}
-    private TextView button(String value,boolean primary,Runnable action){TextView button=text(value,15,primary?WHITE:INK,true);button.setGravity(Gravity.CENTER);button.setPadding(dp(12),dp(14),dp(12),dp(14));button.setMinHeight(dp(56));button.setMinWidth(dp(56));button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656),background(primary?GREEN:WHITE,primary?0:LINE,12),null));button.setFocusable(true);button.setClickable(true);button.setContentDescription(value);button.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View view,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(view,info);info.setClassName(Button.class.getName());}});button.setOnClickListener(v->action.run());return button;}
+    private TextView text(String value,int sp,int color,boolean bold){TextView text=new TextView(activity);text.setText(value);text.setTextSize(Math.max(14,sp));text.setTextColor(color);text.setTypeface(ScenicTypography.font(activity,bold?600:400));text.setIncludeFontPadding(false);text.setLineSpacing(dp(3),1);return text;}
+    private TextView button(String value,boolean primary,Runnable action){TextView button=text(value,16,primary?WHITE:INK,true);button.setGravity(Gravity.CENTER);button.setPadding(dp(16),dp(16),dp(16),dp(16));button.setMinHeight(dp(ScenicDesign.TOUCH_HEIGHT));button.setMinWidth(dp(56));button.setBackground(new RippleDrawable(ColorStateList.valueOf(primary?0x28ffffff:ScenicDesign.RIPPLE),background(primary?ACCENT:WHITE,primary?0:LINE,ScenicDesign.CONTROL_RADIUS),null));button.setFocusable(true);button.setClickable(true);button.setContentDescription(value);button.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View view,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(view,info);info.setClassName(Button.class.getName());}});button.setOnClickListener(v->action.run());return button;}
     private void toast(String value){Toast.makeText(activity,value,Toast.LENGTH_SHORT).show();}
 }
