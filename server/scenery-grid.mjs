@@ -38,7 +38,11 @@ function cellFlags(grid, p, spread) {
   }
   return flags;
 }
-// [start, end) sample index pairs of runs (one-sample gaps bridged) of at least minKm.
+/** Scenery bits of the grid cells within `spread` cells of a place (0 = its own cell). Returns 0 without a grid. */
+export function flagsAround(place, grid = loadSceneryGrid(), spread = 2) {
+  if (!grid || !place || !Number.isFinite(place.lat) || !Number.isFinite(place.lon)) return 0;
+  return cellFlags(grid, place, spread);
+}// [start, end) sample index pairs of runs (one-sample gaps bridged) of at least minKm.
 function runRanges(samples, minKm) {
   const flags = samples.slice();
   for (let i = 1; i < flags.length - 1; i++) if (!flags[i] && flags[i - 1] && flags[i + 1]) flags[i] = true;

@@ -266,11 +266,39 @@ test('candidate filter excludes backtracking, beyond destination, hiking, existi
   assert.deepEqual(result.map(place => place.id), ['good']);
 });
 
+test('amusement, commercial and bare garden places are never offered as a scenic stop', async () => {
+  const { selectScenicCandidates } = await import('../server/destination-routes.mjs');
+  const trip = { origin: { lat: 35.1, lon: 129 }, destination: { lat: 35.1, lon: 129.2 }, theme: 'all', fast: { distanceKm: 20, coordinates: [[35.1, 129], [35.1, 129.1], [35.1, 129.2]] } };
+  const at = (id, title) => ({ id, title, lat: 35.11, lon: 129.1 });
+  for (const title of ['마이돈촌테마공원', '과일나라 테마파크', '푸른숲 유원지', '숲속 리조트', '바다 카페', '마이정원', '쌍류포도정원협동조합']) {
+    assert.deepEqual(selectScenicCandidates(trip, { places: [at('x', title)] }).map(place => place.id), [], title);
+  }
+  for (const title of ['푸른 해안도로', '순천만국가정원', '호반 전망대', '메타세쿼이아 가로수길']) {
+    assert.equal(selectScenicCandidates(trip, { places: [at('ok', title)] }).length, 1, title);
+  }
+});
+
+test('an offline OSM grid must also find the title scene beside the place', async () => {
+  const { selectScenicCandidates } = await import('../server/destination-routes.mjs');
+  const grid = { LON0: 129, LAT0: 35, dLon: 0.003, dLat: 0.00225, W: 200, H: 120, cells: new Uint8Array(200 * 120) };
+  const trip = { origin: { lat: 35.1, lon: 129 }, destination: { lat: 35.1, lon: 129.2 }, theme: 'all', fast: { distanceKm: 20, coordinates: [[35.1, 129], [35.1, 129.1], [35.1, 129.2]] } };
+  const place = { id: 'sea', title: '푸른 바다', lat: 35.11, lon: 129.1 };
+  assert.equal(selectScenicCandidates(trip, { places: [place] }, null).length, 1, 'no grid: the title decides');
+  assert.equal(selectScenicCandidates(trip, { places: [place] }, grid).length, 0, 'a coast name with no coast around it is dropped');
+  const cx = Math.floor((place.lon - grid.LON0) / grid.dLon), cy = Math.floor((place.lat - grid.LAT0) / grid.dLat);
+  grid.cells[cy * grid.W + cx] = 1;
+  const [kept] = selectScenicCandidates(trip, { places: [place] }, grid);
+  assert.equal(kept.id, 'sea');
+  const plain = selectScenicCandidates(trip, { places: [place] }, null)[0];
+  assert.ok(kept.value > plain.value, 'a scene found in the grid scores higher than a title alone');
+  // Scenes the grid cannot judge keep the title hint.
+  assert.equal(selectScenicCandidates({ ...trip, theme: 'countryside' }, { places: [{ id: 'f', title: '청보리밭', lat: 35.11, lon: 129.1 }] }, grid).length, 1);
+});
 test('route corridor follows real bends instead of accepting everything near the origin-destination line', async () => {
   const { selectScenicCandidates } = await import('../server/destination-routes.mjs');
   const result = selectScenicCandidates({ origin: { lat: 35.1, lon: 129 }, destination: { lat: 35.1, lon: 129.2 }, theme: 'forest', fast: { distanceKm: 35, coordinates: [[35.1, 129], [35.17, 129.1], [35.1, 129.2]] } }, { places: [
     { id: 'wrong-corridor', title: '푸른숲', lat: 35.09, lon: 129.1 },
-    { id: 'right-corridor', title: '초록정원', lat: 35.16, lon: 129.1 },
+    { id: 'right-corridor', title: '초록숲길', lat: 35.16, lon: 129.1 },
   ] });
   assert.deepEqual(result.map(place => place.id), ['right-corridor']);
 });

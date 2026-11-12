@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeRoute, describeEvidence, findCheckpoints, loadSceneryGrid, GRID_BITS } from '../server/scenery-grid.mjs';
 import { planDestinationRoutes, sceneryBonus } from '../server/destination-routes.mjs';
@@ -165,7 +165,7 @@ test('with a coast theme the planner prefers the place whose road runs along mor
   const two = [{ id: 'a-inland', title: '내륙 풍경', lat: 35.11, lon: 129.05 }, { id: 'b-coastal', title: '해안 풍경', lat: 35.11, lon: 129.15 }];
   const [, row] = cellOf(35.1, 129.0);
   const [xa] = cellOf(35.1, 129.0);
-  const grid = makeGrid(set => { for (let x = xa + 60; x < xa + 200 && x < W; x++) for (let y = row - 3; y <= row + 3; y++) set(x, y, GRID_BITS.coast); });
+  const grid = makeGrid(set => { for (let x = xa + 60; x < xa + 200 && x < W; x++) for (let y = row - 3; y <= row + 3; y++) set(x, y, GRID_BITS.coast); for (let x = xa + 51; x <= xa + 57; x++) for (let y = row + 3; y <= row + 6; y++) set(x, y, GRID_BITS.coast); });
   const result = await planDestinationRoutes(sceneTrip, { fetchImpl, env, catalog: { places: two }, scenery: grid });
   assert.equal(result.scenicStatus, 'ok');
   assert.ok(result.routes[1].waypoints.some(w => Math.abs(w.lon - 129.15) < 0.01), JSON.stringify(result.routes[1].waypoints));

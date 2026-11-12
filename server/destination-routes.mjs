@@ -1,7 +1,7 @@
 import { ApiError, buildKakaoUrl, normalizeKakao } from './providers.mjs';
 import { getPreparedCatalog } from './android-catalog.mjs';
 import { scenicSelectionSigner } from './scenic-photos.mjs';
-import { analyzeRoute, describeEvidence, findCheckpoints } from './scenery-grid.mjs';
+import { GRID_BITS, analyzeRoute, describeEvidence, findCheckpoints, flagsAround } from './scenery-grid.mjs';
 import { loadDriveCourses } from './drive-courses.mjs';
 
 const SOURCE = 'Kakao Mobility';
@@ -146,6 +146,8 @@ function scenery(title) {
   if (/정상|등산|탐방|둘레길|산책|스카이워크|출렁다리|등대|터널|야영|캠핑|기찻길/.test(title)
     || /박물관|미술관|전시관|홍보관|체험관|문화관|기념관|과학관|도서관|천문대|타워|수족관|아쿠아리움|스파|온천(?!천)|사우나|실내|스튜디오|키즈카페|쇼핑|백화점|공항/.test(title)
     || /유람선|여객선|선착장|무인도|해상/.test(title)
+    // Amusement and commercial places are a destination in themselves, not a stretch of road to drive.
+    || /테마\s*(?:파크|공원|랜드|월드|마을|타운|농원)|유원지|놀이공원|워터파크|동물원|리조트|펜션|골프|스키장|썰매|카페|맛집|식당/.test(title)
     || /(?:^|[\s(])(?:가파도|마라도|우도|울릉도|독도|홍도|흑산도|백령도|추자도|소매물도)(?:[\s)]|$)/.test(title)) return [];
   const themes = [];
   const coastal = /해변|해수욕장|해안|바다|포구|방파제|항구|대포항|궁평항광장/.test(title);
@@ -153,7 +155,7 @@ function scenery(title) {
   const urbanTitle = title.replace(/슬로\s*시티/g, '');
   const urban = /도심|도시공원|도시숲|도시자연공원|시티|야경|문화\s*(?:의\s*)?거리|예술\s*(?:의\s*)?거리|한강(?:시민)?공원|중앙공원|시민공원|광장|대교(?=$|[\s(])/.test(urbanTitle);
   if (coastal) themes.push('coast');
-  if (/숲|수목원|휴양림|삼림|산림|정원|가로수길|메타세쿼이아|메타쉐콰이어|은행나무길|벚꽃길/.test(title)) themes.push('forest');
+  if (/숲|수목원|휴양림|삼림|산림|국가정원|식물원|가로수길|메타세쿼이아|메타쉐콰이어|은행나무길|벚꽃길/.test(title)) themes.push('forest');
   // Never match individual 산/강/밭/재 syllables: 부산, 강남, 한밭 and
   // historic buildings such as 도곡재 are not evidence of those landscapes.
   // An explicit coast/city viewpoint belongs to that scene. A generic viewpoint
@@ -167,11 +169,21 @@ function scenery(title) {
   return themes;
 }
 
+// A title is only a hint. When the offline OSM grid is available, a coast, lake/river, forest or
+// mountain scene must also be found around the place itself; scenes the grid cannot judge
+// (countryside, city) keep the title hint. Missing grid: the title decides, as before.
+const OSM_SCENE_BITS = { coast: GRID_BITS.coast, water: GRID_BITS.water, forest: GRID_BITS.forest, mountain: GRID_BITS.mountain | GRID_BITS.viewpoint };
+function confirmScenes(place, themes, grid) {
+  if (!grid) return { themes, confirmed: 0 };
+  const flags = flagsAround(place, grid, 2);
+  const kept = themes.filter(theme => !(theme in OSM_SCENE_BITS) || flags & OSM_SCENE_BITS[theme]);
+  return { themes: kept, confirmed: kept.filter(theme => theme in OSM_SCENE_BITS).length };
+}
 // A requested scene outranks an 'all' match, and extra scene tags add a small bonus.
 // This ranks title-based hints only; it is not a measure of the road's actual view.
 const sceneValue = (themes, theme) => (theme === 'all' ? 2 : 3) + Math.min(1, (themes.length - 1) * 0.5);
 
-export function selectScenicCandidates({ origin, destination, theme, fast, extraMinutes = 30, limit = 3 }, catalog = getPreparedCatalog()) {
+export function selectScenicCandidates({ origin, destination, theme, fast, extraMinutes = 30, limit = 3 }, catalog = getPreparedCatalog(), grid = null) {
   const direct = distanceMeters(origin, destination);
   const target = project(destination, origin), denominator = target.x ** 2 + target.y ** 2;
   if (direct < 500 || !denominator) return [];
@@ -182,11 +194,12 @@ export function selectScenicCandidates({ origin, destination, theme, fast, extra
   const seen = new Set(), candidates = [];
   for (const place of catalog.places) {
     if (!object(place) || !safeId(place.id) || seen.has(place.id) || !domesticCoordinate(place) || !text(place.title, 200)) continue;
-    const themes = scenery(place.title);
+    const { themes, confirmed } = confirmScenes(place, scenery(place.title), grid);
     if (!themes.length || (theme !== 'all' && !themes.includes(theme))) continue;
     // For places with several scenes, keep the requested theme first in labels.
     const selectedTheme = theme === 'all' ? themes[0] : theme;
-    const value = sceneValue(themes, theme);
+    // Scenes the grid also found beside the place count a little more than a title alone.
+    const value = sceneValue(themes, theme) + (confirmed ? 0.5 : 0);
     const fromStart = distanceMeters(origin, place), toEnd = distanceMeters(place, destination);
     if (fromStart < 500 || toEnd < 500 || fromStart + toEnd - direct > Math.min(10000 * reach, Math.max(1500, direct * 0.4))) continue;
     const xy = project(place, origin), forward = (xy.x * target.x + xy.y * target.y) / denominator;
@@ -412,7 +425,7 @@ export async function planDestinationRoutes(input, { env = process.env, fetchImp
 
   let candidates;
   // With measurements, more places are tried as roads and ranked by the scenery along each road.
-  try { candidates = selectScenicCandidates({ origin, destination: goal, theme, fast, extraMinutes: extra, limit: fastStats ? 5 : 3 }, catalog); }
+  try { candidates = selectScenicCandidates({ origin, destination: goal, theme, fast, extraMinutes: extra, limit: fastStats ? 5 : 3 }, catalog, scenery); }
   catch { return withCurated('provider_unavailable', '풍경 기초정보를 확인하지 못해 빠른 경로만 표시합니다.'); }
   if (!candidates.length) return withCurated('no_candidates', `목적지로 가는 길 주변에서 ${theme === 'all' ? '조건에 맞는' : `선택한 ‘${SCENIC_THEMES[theme]}’`} 풍경 통과 지점을 찾지 못해 빠른 경로만 표시합니다.`);
   // Require a real approach toward every scenery stop, independent of polyline sampling.
