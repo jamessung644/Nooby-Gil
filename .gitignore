@@ -6,6 +6,8 @@ node_modules/
 .openai/
 .idea/
 .vscode/
+.agents/
+.codex/
 dist-offline/
 __pycache__/
 *.pyc
