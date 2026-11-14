@@ -3,70 +3,44 @@ package com.scenic.pleos;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.ContentValues;
 import android.content.Intent;
-import android.content.ClipData;
-import android.database.Cursor;
-import android.media.MediaMetadataRetriever;
-import android.provider.OpenableColumns;
-import android.text.InputType;
-import android.widget.Switch;
-import java.io.FileOutputStream;
-import java.util.HashSet;
-import java.util.Set;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
-import android.media.AudioManager;
+import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
-import android.speech.RecognizerIntent;
-import android.text.Editable;
-import android.text.InputFilter;
-import android.text.TextWatcher;
+import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.View;
-import android.view.Window;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.MediaController;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.VideoView;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Collections;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.TreeSet;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Local monthly movie creation. Existing captures are explicitly labelled sample photographs. */
+/** Automatically selected local travel memories. No manual editing workflow. */
 public final class RecapExperience {
     public interface Host {
         boolean canInteract();
@@ -75,414 +49,235 @@ public final class RecapExperience {
         default String journeyId(){return "";}
         default String journeyTitle(){return "선택한 여정";}
     }
-    private static final int INK=0xff19332c,MUTED=0xff65766f,LINE=0xffdee7e1,SOFT=0xffeaf1ec,WHITE=0xffffffff,GREEN=0xff2c6656;
-    private static final int MAX_FRAMES=6;
+    private static final int INK=ScenicDesign.INK,MUTED=ScenicDesign.MUTED,LINE=ScenicDesign.LINE,SOFT=ScenicDesign.SOFT,WHITE=ScenicDesign.SURFACE,ACCENT=ScenicDesign.ACCENT;
+    private static final int VIDEO_PICK=705,FOLDER_PICK=706;
     private final Activity activity;
     private final Host host;
     private final SharedPreferences prefs;
     private final PersonalVideoStore personalVideos;
-    private final Set<String> importsPending=new HashSet<>();
-    private int importing,mediaPage;
-    private boolean personalMode;
-    private String pickerJourneyId="",pickerJourneyTitle="";
+    private final RecapOriginalDownloads originalDownloads;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
-    private final HashMap<String,Bitmap> bitmaps=new HashMap<>();
-    private final ArrayList<View> editingControls=new ArrayList<>();
-    private String month,mood,caption,status="";
-    private boolean wide,active,destroyed,busy,saving,sampleMode;
-    private int generation,progress;
-    private AtomicBoolean cancellation;
-    private Future<?> job;
-    private File exportedFile;
-    private Uri savedUri;
-    private View root;
+    private final Set<String> pending=new HashSet<>(),failedAnalysis=new HashSet<>(),failedSources=new HashSet<>();
+    private final LinkedHashMap<String,Bitmap> bitmaps=new LinkedHashMap<>();
+    private final ArrayList<View> controls=new ArrayList<>();
+    private volatile boolean destroyed;
+    private boolean active,wide,archive,scanning,saving,collecting;
+    private int imports,archivePage,movieProgress;
+    private String status="",sourceError="",pickerJourneyId="",pickerJourneyTitle="",movieStory="";
+    private RecapStoryPlanner.Story opened;
     private LinearLayout panel;
-    private TextView statusView,generateButton,playButton,saveButton,posterCaption;
-    private ProgressBar progressView;
+    private View root;
+    private FrameLayout experienceRoot;
+    private ScrollView feedScroll;
+    private RecapStoryView storyView;
+    private List<MemoryPhoto> visibleStoryPhotos=Collections.emptyList();
     private AlertDialog dialog;
     private VideoView video;
-    private EditText captionEditor;
-    private boolean voicePending;
-    private String voiceMonth,pendingVoiceText;
-
-    public RecapExperience(Activity activity,Host host) {
-        if(activity==null||host==null)throw new IllegalArgumentException("Activity and host are required");
-        this.activity=activity;this.host=host;prefs=activity.getSharedPreferences("scenic_monthly_recap",0);
+    private AtomicBoolean movieCancel;
+    private final HashSet<String> moviesFailed=new HashSet<>();
+    private static final class MemoryPhoto {
+        final String path,asset,label,credit;
+        final PersonalVideoStore.Record video;
+        final AutoRecapAnalyzer.Scene scene;
+        MemoryPhoto(String path,String asset,String label,String credit,PersonalVideoStore.Record video,AutoRecapAnalyzer.Scene scene){this.path=path;this.asset=asset;this.label=label;this.credit=credit;this.video=video;this.scene=scene;}
+    }
+    public RecapExperience(Activity activity,Host host){
+        this.activity=Objects.requireNonNull(activity);this.host=Objects.requireNonNull(host);
+        prefs=activity.getSharedPreferences("scenic_monthly_recap",0);
         personalVideos=new PersonalVideoStore(new PersonalVideoStore.Persistence(){public String read(){return prefs.getString("personal_videos_v1","");}public void write(String value){prefs.edit().putString("personal_videos_v1",value).apply();}});
-        month=monthKey(System.currentTimeMillis());loadChoices();
+        originalDownloads=new RecapOriginalDownloads(activity);
     }
-
-    /** Returns a scrollable view on wide screens and a natural-height column otherwise. */
-    public View createView(boolean wide) {
-        if(destroyed)throw new IllegalStateException("Recap experience was destroyed");
-        this.wide=wide;active=true;stopPlayback();applyPendingVoice();
-        panel=column();panel.setPadding(dp(24),dp(24),dp(24),dp(28));panel.setBackground(background(WHITE,LINE,16));
-        if(wide){ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(true);scroll.setVerticalScrollBarEnabled(false);scroll.addView(panel,new ScrollView.LayoutParams(-1,-2));root=scroll;}else root=panel;
-        final View mounted=root;
-        root.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener(){
-            public void onViewAttachedToWindow(View view){if(root==mounted&&!destroyed){active=true;main.removeCallbacks(safetyWatch);main.post(safetyWatch);}}
-            public void onViewDetachedFromWindow(View view){if(root==mounted)pause();}
-        });
-        render();return root;
+    public View createView(boolean wide){
+        if(destroyed)throw new IllegalStateException("Recap destroyed");
+        this.wide=wide&&activity.getResources().getConfiguration().screenWidthDp>=840&&activity.getResources().getConfiguration().fontScale<1.3f;
+        active=true;stopPlayback();if(storyView!=null){storyView.destroy();storyView=null;}panel=column();panel.setPadding(dp(8),dp(8),dp(8),dp(24));
+        experienceRoot=new FrameLayout(activity);feedScroll=new ScrollView(activity);feedScroll.setFillViewport(true);feedScroll.setVerticalScrollBarEnabled(false);feedScroll.addView(panel);experienceRoot.addView(feedScroll,new FrameLayout.LayoutParams(-1,-1));root=experienceRoot;
+        final View mounted=root;root.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener(){public void onViewAttachedToWindow(View v){if(root==mounted&&!destroyed){active=true;main.removeCallbacks(watch);main.post(watch);if(storyView!=null)storyView.resume();}}public void onViewDetachedFromWindow(View v){if(root==mounted)pause();}});
+        refreshOpened();render();analyzeExisting();scanFolder();return root;
     }
-
-    /** Called on tab leave, lifecycle pause, or a vehicle restriction. Never auto-resumes video. */
-    public void pause() {
-        active=false;main.removeCallbacks(safetyWatch);stopPlayback();
-        if(dialog!=null){AlertDialog old=dialog;dialog=null;old.dismiss();}
-        if(busy||saving)cancelWork("화면을 벗어나 제작을 멈췄어요. 정차 후 다시 시작할 수 있어요.");
+    public void pause(){active=false;main.removeCallbacks(watch);stopPlayback();if(storyView!=null)storyView.pause();if(dialog!=null){dialog.dismiss();dialog=null;}if(movieCancel!=null)movieCancel.set(true);}
+    public void onAppResume(){if(destroyed)return;collecting=true;main.removeCallbacks(sourceWatch);main.post(sourceWatch);analyzeExisting();}
+    public void onAppPause(){collecting=false;main.removeCallbacks(sourceWatch);pause();}
+    private final Runnable sourceWatch=new Runnable(){public void run(){if(!collecting||destroyed)return;scanFolder();main.postDelayed(this,60000);}};
+    public void destroy(){if(destroyed)return;onAppPause();destroyed=true;if(storyView!=null)storyView.destroy();originalDownloads.destroy();worker.shutdownNow();bitmaps.clear();panel=null;root=null;}
+    public boolean handleBack(){if(dialog!=null){stopPlayback();if(dialog!=null)dialog.dismiss();dialog=null;return true;}if(opened!=null){opened=null;status="";render();scrollTop();return true;}if(archive){archive=false;status="";render();scrollTop();return true;}return false;}
+    private void scrollTop(){if(feedScroll!=null){ScrollView scroll=feedScroll;scroll.post(()->scroll.scrollTo(0,0));}}
+    private final Runnable watch=new Runnable(){public void run(){if(!active||destroyed)return;if(!host.canInteract()){stopPlayback();if(dialog!=null){dialog.dismiss();dialog=null;}if(movieCancel!=null)movieCancel.set(true);}for(View control:controls){control.setEnabled(host.canInteract()&&!saving&&!Boolean.FALSE.equals(control.getTag()));control.setAlpha(control.isEnabled()?1:.45f);}main.postDelayed(this,500);}};
+    public boolean handleActivityResult(int request,int result,Intent data){
+        if(request!=VIDEO_PICK&&request!=FOLDER_PICK)return false;
+        if(result!=Activity.RESULT_OK||data==null||destroyed)return true;
+        if(request==FOLDER_PICK){Uri uri=data.getData();if(uri==null)return true;try{activity.getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);prefs.edit().putString("recap_source_tree",uri.toString()).apply();sourceError="";status="폴더를 연결했어요. 여행 장면을 모으고 있어요.";scanFolder();}catch(SecurityException denied){status="폴더를 읽을 수 없어요. 다시 연결해 주세요.";}if(active)render();return true;}
+        ArrayList<Uri> selected=new ArrayList<>();if(data.getData()!=null)selected.add(data.getData());ClipData clips=data.getClipData();if(clips!=null)for(int i=0;i<Math.min(12,clips.getItemCount());i++)selected.add(clips.getItemAt(i).getUri());
+        for(Uri uri:selected)try{activity.getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);queueVideo(uri,"",0,pickerJourneyId,pickerJourneyTitle,true);}catch(SecurityException denied){status="영상 접근 권한을 유지할 수 없어요. 다시 선택해 주세요.";}
+        if(active)render();return true;
     }
-
-    public void destroy() {
-        if(destroyed)return;pause();destroyed=true;worker.shutdownNow();
-        // Keep queued completion callbacks: their destroyed guards clean up cancelled files/URIs.
-        // They never update views after destruction. Only the repeating safety watch is removed.
-        main.removeCallbacks(safetyWatch);
-        // Views may still draw during Activity teardown, so let the bitmap cache be collected normally.
-        bitmaps.clear();root=null;panel=null;
+    public void importLegacyVideo(Uri uri,String title,long durationMs,long capturedAt,String journeyId,String journeyTitle){queueVideo(uri,title,capturedAt,journeyId,journeyTitle,true);}
+    public void migrateLegacyVideo(Uri uri,String title,long durationMs,long capturedAt,String journeyId,String journeyTitle){if(uri!=null&&!prefs.getBoolean(legacyKey(uri),false))queueVideo(uri,title,capturedAt,journeyId,journeyTitle,false);}
+    private static String legacyKey(Uri uri){return "legacy_import_"+hash(uri.toString());}
+    private void pickVideos(){if(!allowed())return;pickerJourneyId=host.journeyId();pickerJourneyTitle=host.journeyTitle();Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("video/*").addCategory(Intent.CATEGORY_OPENABLE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);launchPicker(intent,VIDEO_PICK);}
+    private void connectFolder(){if(!allowed())return;Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION|Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);launchPicker(intent,FOLDER_PICK);}
+    private void launchPicker(Intent intent,int request){try{activity.startActivityForResult(new Intent(intent).setPackage("com.android.documentsui"),request);}catch(ActivityNotFoundException absent){try{activity.startActivityForResult(intent,request);}catch(ActivityNotFoundException error){toast("이 기기에는 파일 선택기가 없어요.");}}}
+    private void scanFolder(){
+        String source=prefs.getString("recap_source_tree","");if(destroyed||scanning||source.isEmpty())return;scanning=true;
+        Set<String> excluded=new HashSet<>(pending);excluded.addAll(failedSources);for(PersonalVideoStore.Record record:personalVideos.all())excluded.add(record.uri);
+        worker.submit(()->{try{List<AutoRecapSource.SourceVideo> found=AutoRecapSource.scan(activity,Uri.parse(source),excluded,()->destroyed||Thread.currentThread().isInterrupted());main.post(()->{scanning=false;if(destroyed)return;sourceError="";int added=0;for(AutoRecapSource.SourceVideo file:found){if(!hasUri(file.uri)&&!pending.contains(file.uri.toString())&&added++<12)queueVideo(file.uri,file.title,0,"","",false);}if(active)render();});}catch(Exception error){main.post(()->{scanning=false;if(destroyed)return;sourceError="연결한 폴더를 읽을 수 없어요. 폴더를 다시 연결해 주세요.";if(active)render();});}});
     }
-
-    /** Forward Activity.onActivityResult here. Recognition begins only after a user tap. */
-    public boolean handleActivityResult(int requestCode,int resultCode,Intent data){
-        if(requestCode==705){if(resultCode==Activity.RESULT_OK&&data!=null&&!destroyed){ArrayList<Uri> selected=new ArrayList<>();if(data.getData()!=null)selected.add(data.getData());ClipData items=data.getClipData();if(items!=null)for(int i=0;i<Math.min(items.getItemCount(),12);i++)if(items.getItemAt(i).getUri()!=null)selected.add(items.getItemAt(i).getUri());for(Uri uri:selected){try{activity.getContentResolver().takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);queueVideo(uri,"",0,0,pickerJourneyId,pickerJourneyTitle,true);}catch(SecurityException error){status="파일 접근 권한을 유지할 수 없어요. 기기에 저장된 영상을 다시 선택해 주세요.";}}}return true;}
-        if(requestCode!=704)return false;
-        if(!voicePending||destroyed)return true;voicePending=false;
-        if(resultCode!=Activity.RESULT_OK||data==null||!month.equals(voiceMonth))return true;
-        ArrayList<String> results=data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
-        if(results==null||results.isEmpty()||results.get(0)==null)return true;
-        pendingVoiceText=normalizedCaption(results.get(0));
-        // Activity results can precede onResume. Apply only after the recap is active and safe.
-        if(active){applyPendingVoice();render();}return true;
+    private boolean hasUri(Uri uri){for(PersonalVideoStore.Record r:personalVideos.all())if(r.uri.equals(uri.toString()))return true;return false;}
+    private void queueVideo(Uri uri,String title,long capturedAt,String journeyId,String journeyTitle,boolean reveal){
+        if(destroyed||uri==null||!"content".equals(uri.getScheme())||hasUri(uri)||!pending.add(uri.toString()))return;
+        imports++;if(active)render();
+        worker.submit(()->{MediaMetadataRetriever reader=new MediaMetadataRetriever();Bitmap thumb=null;try{
+            reader.setDataSource(activity,uri);long duration=Long.parseLong(reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION));if(duration<1000||duration>3600000)throw new IllegalArgumentException("1초~1시간 길이의 영상을 연결해 주세요.");
+            MessageDigest digest=MessageDigest.getInstance("SHA-256");try(InputStream input=activity.getContentResolver().openInputStream(uri)){if(input==null)throw new IOException();byte[] buffer=new byte[65536];int count;long total=0;while((count=input.read(buffer))!=-1){if(destroyed||Thread.currentThread().isInterrupted())throw new InterruptedException();total+=count;if(total>512L*1024*1024)throw new IllegalArgumentException("512MB 이하의 영상을 연결해 주세요.");digest.update(buffer,0,count);}}
+            String id=hex(digest.digest());String name=clean(title,120);if(name.isEmpty())try(Cursor c=activity.getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){if(c!=null&&c.moveToFirst())name=clean(c.getString(0),120);}String filename=name.isEmpty()?"여행 영상":name;
+            long mediaDate=PersonalVideoStore.parseMediaDate(reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE));long date=capturedAt>0?capturedAt:mediaDate>0?mediaDate:System.currentTimeMillis();String dateSource=capturedAt>0?"record":mediaDate>0?"media":"import";
+            String place=clean(journeyTitle,180),group=clean(journeyId,180);if(place.isEmpty()||place.equals("선택한 여정")){place=placeFromMetadata(reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION));group=place.isEmpty()?"":"place:"+place;}
+            PersonalVideoStore.Record draft=new PersonalVideoStore.Record(id,uri.toString(),filename,group,place,duration,date,0,Math.min(4000,duration),true,dateSource);
+            thumb=reader.getScaledFrameAtTime(0,MediaMetadataRetriever.OPTION_CLOSEST_SYNC,480,270);if(thumb!=null)try(OutputStream output=new FileOutputStream(new File(thumbnailDir(),id+".jpg"))){thumb.compress(Bitmap.CompressFormat.JPEG,85,output);}
+            boolean analyzed=true;try{AutoRecapAnalyzer.analyze(activity,draft,()->destroyed||Thread.currentThread().isInterrupted());}catch(Exception error){if(destroyed||Thread.currentThread().isInterrupted())throw error;analyzed=false;}
+            final String finalPlace=place,finalGroup=group;final boolean analysisOk=analyzed;main.post(()->{pending.remove(uri.toString());imports=Math.max(0,imports-1);if(destroyed)return;personalVideos.add(id,uri.toString(),filename,finalGroup,finalPlace,duration,date,dateSource);prefs.edit().putBoolean(legacyKey(uri),true).apply();status=analysisOk?"":"장면 선별을 마치지 못했어요. 모든 기록에서 원본을 볼 수 있어요.";if(!analysisOk)failedAnalysis.add(id);if(reveal){archive=false;opened=null;}if(active){refreshOpened();render();}});
+        }catch(Exception error){main.post(()->{pending.remove(uri.toString());failedSources.add(uri.toString());imports=Math.max(0,imports-1);if(destroyed)return;status=error instanceof IllegalArgumentException?error.getMessage():"영상을 읽지 못했어요. 원본 파일을 다시 연결해 주세요.";if(active)render();});}finally{if(thumb!=null)thumb.recycle();try{reader.release();}catch(Exception ignored){}}});
     }
-
-    private void applyPendingVoice(){
-        if(pendingVoiceText==null)return;String result=pendingVoiceText;pendingVoiceText=null;
-        if(!active||destroyed||!host.canInteract()||!month.equals(voiceMonth)){status="정차 후 음성 메모를 다시 시작해 주세요.";return;}
-        if(result.isEmpty())return;caption=result;prefs.edit().putString("caption_"+month,caption).apply();invalidateExport();status="음성 메모를 넣었어요. 내용을 확인하고 자유롭게 고쳐 보세요.";
-    }
-
-    private void requestVoice(){
-        if(!allowed()||busy||saving||importing>0)return;
-        Intent intent=new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE,"ko-KR");intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS,1);
-        intent.putExtra(RecognizerIntent.EXTRA_PROMPT,"이번 달 기억하고 싶은 순간을 말해 주세요");
-        if(intent.resolveActivity(activity.getPackageManager())==null){voiceUnavailable();return;}
-        voicePending=true;voiceMonth=month;pendingVoiceText=null;
-        try{activity.startActivityForResult(intent,704);}catch(ActivityNotFoundException|SecurityException unavailable){voicePending=false;voiceUnavailable();}
-    }
-
-    private void voiceUnavailable(){
-        toast("이 기기에는 음성 입력 앱이 없어요. 메모를 직접 입력해 주세요.");
-        if(captionEditor!=null){captionEditor.requestFocus();InputMethodManager keyboard=(InputMethodManager)activity.getSystemService(Activity.INPUT_METHOD_SERVICE);if(keyboard!=null)keyboard.showSoftInput(captionEditor,InputMethodManager.SHOW_IMPLICIT);}
-    }
-
-    private final Runnable safetyWatch=new Runnable(){public void run(){
-        if(!active||destroyed)return;
-        if(!host.canInteract()){
-            stopPlayback();if(dialog!=null){AlertDialog old=dialog;dialog=null;old.dismiss();}
-            if(busy||saving)cancelWork("정차 후 리캡을 만들고 재생할 수 있어요.");
-            updateControls();
-        }else updateControls();
-        main.postDelayed(this,400);
-    }};
-
-    private void pickVideos(){
-        if(!allowed()||busy||saving||importing>0)return;
-        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("video/*").addCategory(Intent.CATEGORY_OPENABLE);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);
-        pickerJourneyId=host.journeyId();pickerJourneyTitle=host.journeyTitle();
-        // AAOS may give its no-op DocumentsUI stub a higher priority than the installed
-        // Files picker. Open that standard picker while parked, retaining OEM fallback.
-        try{activity.startActivityForResult(new Intent(intent).setPackage("com.android.documentsui"),705);}
-        catch(ActivityNotFoundException unavailable){try{activity.startActivityForResult(intent,705);}catch(ActivityNotFoundException error){toast("이 기기에는 파일 선택기가 없어요. 영상 파일을 기기에 복사한 뒤 다시 시도해 주세요.");}}
-    }
-
-    /** Connects the existing user-chosen video library. Duplicate URI/content is ignored. */
-    public void importLegacyVideo(Uri uri,String title,long durationMs,long capturedAt,String journeyId,String journeyTitle){
-        queueVideo(uri,title,durationMs,capturedAt,journeyId,journeyTitle,false);
-    }
-    /** One-time startup migration; removing an imported record must not resurrect it next launch. */
-    public void migrateLegacyVideo(Uri uri,String title,long durationMs,long capturedAt,String journeyId,String journeyTitle){
-        if(uri==null||prefs.getBoolean(legacyKey(uri),false))return;
-        for(PersonalVideoStore.Record record:personalVideos.all())if(record.uri.equals(uri.toString())){prefs.edit().putBoolean(legacyKey(uri),true).apply();return;}
-        queueVideo(uri,title,durationMs,capturedAt,journeyId,journeyTitle,false);
-    }
-    private static String legacyKey(Uri uri){try{byte[] hash=MessageDigest.getInstance("SHA-256").digest(uri.toString().getBytes(StandardCharsets.UTF_8));StringBuilder key=new StringBuilder("legacy_import_");for(byte b:hash)key.append(String.format(Locale.US,"%02x",b&255));return key.toString();}catch(Exception impossible){throw new IllegalStateException(impossible);}}
-
-    private void queueVideo(Uri uri,String title,long durationMs,long capturedAt,String journeyId,String journeyTitle,boolean reveal){
-        if(destroyed||uri==null||!"content".equals(uri.getScheme()))return;
-        for(PersonalVideoStore.Record record:personalVideos.all())if(record.uri.equals(uri.toString())){if(reveal){month=record.month();loadChoices();personalMode=true;sampleMode=false;prefs.edit().putBoolean("personal_mode_"+month,true).apply();status="이미 추가한 영상이에요.";if(active)render();}return;}
-        if(!importsPending.add(uri.toString()))return;importing++;if(active)updateControls();
-        worker.submit(()->{
-            MediaMetadataRetriever retriever=new MediaMetadataRetriever();Bitmap thumbnail=null;
-            try{
-                retriever.setDataSource(activity,uri);String rawDuration=retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);long actualDuration=Long.parseLong(rawDuration);
-                if(actualDuration<1000||actualDuration>3600000)throw new IllegalArgumentException("영상 길이는 1초부터 1시간까지 지원해요.");
-                MessageDigest digest=MessageDigest.getInstance("SHA-256");long length=0;
-                try(InputStream input=activity.getContentResolver().openInputStream(uri)){
-                    if(input==null)throw new IllegalArgumentException("원본 파일을 열 수 없어요.");byte[] bytes=new byte[65536];int count;
-                    while((count=input.read(bytes))!=-1){if(Thread.currentThread().isInterrupted())throw new InterruptedException();length+=count;if(length>512L*1024*1024)throw new IllegalArgumentException("512MB 이하의 영상 파일을 선택해 주세요.");digest.update(bytes,0,count);}
-                }
-                StringBuilder hex=new StringBuilder();for(byte b:digest.digest())hex.append(String.format(Locale.US,"%02x",b&255));String fingerprint=hex.toString();
-                thumbnail=retriever.getScaledFrameAtTime(0,MediaMetadataRetriever.OPTION_CLOSEST_SYNC,360,640);
-                if(thumbnail==null)throw new IllegalArgumentException("영상 장면을 읽을 수 없어요. 다른 파일을 선택해 주세요.");
-                File thumb=new File(thumbnailDir(),fingerprint+".jpg");try(OutputStream output=new FileOutputStream(thumb)){if(!thumbnail.compress(Bitmap.CompressFormat.JPEG,84,output))throw new IllegalStateException("Thumbnail failed");}
-                String resolvedTitle=clean(title,120);if(resolvedTitle.isEmpty())try(Cursor cursor=activity.getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)){if(cursor!=null&&cursor.moveToFirst())resolvedTitle=clean(cursor.getString(0),120);}catch(RuntimeException ignored){}
-                final String filename=resolvedTitle.isEmpty()?"가져온 영상":resolvedTitle;final long mediaDate=capturedAt>0?0:PersonalVideoStore.parseMediaDate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE));final long date=capturedAt>0?capturedAt:mediaDate>0?mediaDate:System.currentTimeMillis();final String dateSource=capturedAt>0?"record":mediaDate>0?"media":"import";
-                main.post(()->{importsPending.remove(uri.toString());importing=Math.max(0,importing-1);if(destroyed)return;int before=personalVideos.all().size();PersonalVideoStore.Record record=personalVideos.add(fingerprint,uri.toString(),filename,journeyId,journeyTitle,actualDuration,date,dateSource);if(!reveal)prefs.edit().putBoolean(legacyKey(uri),true).apply();if(reveal){month=record.month();loadChoices();personalMode=true;sampleMode=false;prefs.edit().putBoolean("personal_mode_"+month,true).apply();}invalidateExport();status=personalVideos.all().size()==before?"같은 내용의 영상은 한 번만 추가했어요.":"영상을 추가했어요. 사용할 구간과 포함 여부를 선택해 보세요.";if(active)render();});
-            }catch(Exception error){final String message=error instanceof IllegalArgumentException&&error.getMessage()!=null&&error.getMessage().contains("요")?error.getMessage():"영상에 접근할 수 없어요. 기기에 저장된 원본 파일을 다시 선택해 주세요.";main.post(()->{importsPending.remove(uri.toString());importing=Math.max(0,importing-1);if(!destroyed){status=message;if(active){toast(message);render();}}});}
-            finally{if(thumbnail!=null)thumbnail.recycle();try{retriever.release();}catch(Exception ignored){}}
-        });
-    }
-
-    private File thumbnailDir(){File directory=new File(activity.getFilesDir(),"recap-thumbnails");if(!directory.isDirectory()&&!directory.mkdirs())throw new IllegalStateException("Cannot create thumbnail directory");return directory;}
-    private Bitmap personalThumbnail(PersonalVideoStore.Record record){String key="personal:"+record.id;if(bitmaps.containsKey(key))return bitmaps.get(key);Bitmap result=BitmapFactory.decodeFile(new File(thumbnailDir(),record.id+".jpg").getAbsolutePath());if(result!=null)bitmaps.put(key,result);return result;}
-    private Bitmap personalPoster(){List<PersonalVideoStore.Record> chosen=personalVideos.selected(month);if(chosen.isEmpty())chosen=personalVideos.forMonth(month);return chosen.isEmpty()?null:personalThumbnail(chosen.get(0));}
-    private static String seconds(long milliseconds){return String.format(Locale.US,"%.1f",milliseconds/1000.0);}
-
-    private void renderPersonalClips(){
-        List<PersonalVideoStore.Record> records=personalVideos.forMonth(month);if(records.isEmpty())return;
-        LinearLayout heading=row();heading.addView(text("내 영상 · "+records.size()+"개 / 선택 "+personalVideos.selected(month).size()+"개",18,INK,true),new LinearLayout.LayoutParams(0,-2,1));TextView auto=button("날짜별 장면 선택",false,()->{if(!allowed()||busy||saving||importing>0)return;personalVideos.selectAcrossDays(month);invalidateExport();render();});editingControls.add(auto);heading.addView(auto);panel.addView(heading);gap(panel,8);
-        panel.addView(text("최대 6개 · 각 1~8초 · 날짜순으로 이어 붙여요. 촬영일을 읽을 수 없으면 가져온 날짜로 분류해요.",12,MUTED,false));gap(panel,12);
-        mediaPage=Math.max(0,Math.min(mediaPage,(records.size()-1)/6));if(records.size()>6){LinearLayout pages=row();TextView previous=button("이전 영상",false,()->{if(!allowed()||busy||saving||importing>0)return;mediaPage=Math.max(0,mediaPage-1);render();});TextView next=button("다음 영상",false,()->{if(!allowed()||busy||saving||importing>0)return;mediaPage=Math.min((records.size()-1)/6,mediaPage+1);render();});pages.addView(previous,new LinearLayout.LayoutParams(0,-2,1));TextView page=text((mediaPage+1)+" / "+((records.size()+5)/6),14,MUTED,false);page.setGravity(Gravity.CENTER);pages.addView(page,size(70,-2));pages.addView(next,new LinearLayout.LayoutParams(0,-2,1));editingControls.add(previous);editingControls.add(next);panel.addView(pages);gap(panel,10);}
-        for(PersonalVideoStore.Record record:records.subList(mediaPage*6,Math.min(records.size(),mediaPage*6+6))){
-            LinearLayout card=column();card.setPadding(dp(14),dp(12),dp(14),dp(14));card.setBackground(background(SOFT,0,12));LinearLayout top=row();ImageView thumb=new ImageView(activity);thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);thumb.setImageBitmap(personalThumbnail(record));thumb.setContentDescription(record.title+" 가져온 영상의 첫 장면");top.addView(thumb,size(90,70));LinearLayout labels=column();labels.setPadding(dp(12),0,dp(10),0);labels.addView(text(record.title,15,INK,true));gap(labels,4);labels.addView(text(("media".equals(record.dateSource)?"촬영일 ":"import".equals(record.dateSource)?"가져온 날짜 ":"기록일 ")+new SimpleDateFormat("M월 d일",Locale.KOREA).format(new Date(record.createdAt))+" · 원본 "+seconds(record.durationMs)+"초",12,MUTED,false));if(!record.journeyTitle.isEmpty()){gap(labels,4);labels.addView(text(record.journeyTitle,12,GREEN,false));}top.addView(labels,new LinearLayout.LayoutParams(0,-2,1));Switch include=new Switch(activity);include.setText("포함");include.setTextColor(INK);include.setChecked(record.included);include.setMinHeight(dp(52));include.setOnCheckedChangeListener((view,checked)->{if(!allowed()||busy||saving||importing>0){view.setOnCheckedChangeListener(null);view.setChecked(record.included);return;}try{personalVideos.edit(record.id,record.startMs,record.endMs,checked);invalidateExport();render();}catch(IllegalArgumentException error){view.setOnCheckedChangeListener(null);view.setChecked(record.included);toast("한 편에 최대 6개를 선택할 수 있어요. 다른 장면을 제외해 주세요.");}});editingControls.add(include);top.addView(include);card.addView(top);gap(card,10);
-            LinearLayout actions=row();TextView trim=button(seconds(record.startMs)+"–"+seconds(record.endMs)+"초 · 구간 편집",false,()->editClip(record));actions.addView(trim,new LinearLayout.LayoutParams(0,-2,1.3f));editingControls.add(trim);TextView preview=button("구간 미리보기",false,()->previewClip(record));LinearLayout.LayoutParams space=new LinearLayout.LayoutParams(0,-2,1);space.setMargins(dp(7),0,dp(7),0);actions.addView(preview,space);editingControls.add(preview);TextView remove=button("목록에서 제거",false,()->removeClip(record));actions.addView(remove,new LinearLayout.LayoutParams(0,-2,1));editingControls.add(remove);card.addView(actions);panel.addView(card,size(-1,-2));gap(panel,10);
+    private void analyzeExisting(){for(PersonalVideoStore.Record record:personalVideos.all())if(AutoRecapAnalyzer.load(activity,record)==null&&!pending.contains(record.id)&&!failedAnalysis.contains(record.id)){pending.add(record.id);imports++;worker.submit(()->{boolean ok=true;try{AutoRecapAnalyzer.analyze(activity,record,()->destroyed||Thread.currentThread().isInterrupted());}catch(Exception error){ok=false;}final boolean success=ok;main.post(()->{pending.remove(record.id);imports=Math.max(0,imports-1);if(destroyed)return;if(!success)failedAnalysis.add(record.id);if(active){refreshOpened();render();}});});}}
+    private List<RecapStoryPlanner.Story> stories(){return RecapStoryPlanner.plan(personalVideos.all(),host.records(),System.currentTimeMillis());}
+    private void refreshOpened(){if(opened==null)return;for(RecapStoryPlanner.Story story:stories())if(story.id.equals(opened.id)){opened=story;return;}if(!opened.sample)opened=null;}
+    private List<MemoryPhoto> photos(RecapStoryPlanner.Story story){
+        // The legacy test input was itself an exported sample recap, with the old UI
+        // already burned into its frames. Rebuild that demo from its credited source
+        // photographs; keep the imported original unchanged in the archive.
+        if(legacySampleImport(story)){
+            ArrayList<MemoryPhoto> cleanSample=new ArrayList<>();
+            for(String key:new String[]{"haeundae","gwangalli","coast"})cleanSample.add(new MemoryPhoto(null,"scenic-demo/"+key+".jpg",key.equals("haeundae")?"해운대":key.equals("gwangalli")?"광안리":"청사포",credit(key),null,null));
+            return cleanSample;
         }
-        gap(panel,10);
+        ArrayList<MemoryPhoto> candidates=new ArrayList<>();for(RecapStoryPlanner.Moment moment:story.moments){if(moment.video!=null){AutoRecapAnalyzer.Result result=AutoRecapAnalyzer.load(activity,moment.video);if(result!=null)for(AutoRecapAnalyzer.Scene scene:result.scenes)candidates.add(new MemoryPhoto(scene.photoPath,null,moment.video.title,"",moment.video,scene));}else if(moment.capture!=null&&!"none".equals(moment.capture.imageKey)){String key=imageKey(moment.capture.imageKey);candidates.add(new MemoryPhoto(null,"scenic-demo/"+key+".jpg",moment.capture.segmentName,credit(key),null,null));}}
+        if(candidates.size()<=6)return candidates;
+        ArrayList<MemoryPhoto> ranked=new ArrayList<>(candidates);ranked.sort((a,b)->Double.compare(b.scene==null?1:b.scene.quality,a.scene==null?1:a.scene.quality));ArrayList<MemoryPhoto> chosen=new ArrayList<>();Set<String> seen=new HashSet<>();for(MemoryPhoto photo:ranked){String key=photo.video==null?photo.asset:photo.video.id;if(seen.add(key)){chosen.add(photo);if(chosen.size()==6)break;}}for(MemoryPhoto photo:ranked)if(chosen.size()<6&&!chosen.contains(photo))chosen.add(photo);chosen.sort(Comparator.comparingLong((MemoryPhoto p)->p.video==null?0:p.video.createdAt).thenComparingLong(p->p.scene==null?0:p.scene.timestampMs));return chosen;
     }
-
-    private void editClip(PersonalVideoStore.Record record){
-        if(!allowed()||busy||saving||importing>0)return;LinearLayout body=column();body.setPadding(dp(22),dp(20),dp(22),dp(20));body.addView(text(record.title,18,INK,true));gap(body,12);body.addView(text("시작·끝 시간을 초로 입력하세요. 원본은 바뀌지 않아요.\n1~8초 길이의 구간을 사용할 수 있어요.",14,MUTED,false));gap(body,12);EditText start=new EditText(activity),end=new EditText(activity);start.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);end.setInputType(start.getInputType());start.setHint("시작 (초)");end.setHint("끝 (초)");start.setText(seconds(record.startMs));end.setText(seconds(record.endMs));start.setContentDescription("영상 구간 시작 초");end.setContentDescription("영상 구간 끝 초");body.addView(start);body.addView(end);
-        dialog=new AlertDialog.Builder(activity).setView(body).setPositiveButton("구간 적용",null).setNegativeButton("취소",null).create();dialog.show();dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{if(!allowed())return;try{double a=Double.parseDouble(start.getText().toString()),b=Double.parseDouble(end.getText().toString());if(!Double.isFinite(a)||!Double.isFinite(b))throw new IllegalArgumentException();personalVideos.edit(record.id,Math.round(a*1000),Math.round(b*1000),record.included);dialog.dismiss();dialog=null;invalidateExport();render();}catch(IllegalArgumentException invalid){end.setError("원본 범위 안에서 1~8초 길이를 선택해 주세요.");}});
-    }
-
-    private void removeClip(PersonalVideoStore.Record record){
-        if(!allowed()||busy||saving||importing>0)return;dialog=new AlertDialog.Builder(activity).setTitle("리캡 목록에서 제거할까요?").setMessage("원본 영상과 이미 저장한 리캡은 삭제하지 않아요.").setPositiveButton("목록에서 제거",(d,w)->{if(!allowed())return;personalVideos.remove(record.id);bitmaps.remove("personal:"+record.id);new File(thumbnailDir(),record.id+".jpg").delete();invalidateExport();dialog=null;render();}).setNegativeButton("취소",null).create();dialog.show();
-    }
-
-    private void previewClip(PersonalVideoStore.Record record){
-        if(!allowed()||busy||saving||importing>0)return;stopPlayback();LinearLayout body=column();body.setPadding(dp(20),dp(18),dp(20),dp(18));body.addView(text("선택 구간 · "+seconds(record.startMs)+"–"+seconds(record.endMs)+"초",18,INK,true));gap(body,12);VideoView player=new VideoView(activity);video=player;body.addView(player,size(-1,320));gap(body,12);body.addView(button("닫기",true,this::stopPlayback),size(-1,-2));dialog=new AlertDialog.Builder(activity).setView(body).create();dialog.setOnDismissListener(d->{if(video==player){try{player.stopPlayback();}catch(RuntimeException ignored){}video=null;}dialog=null;});dialog.show();player.setOnPreparedListener(mp->{if(video!=player||!active||!host.canInteract()){stopPlayback();return;}mp.setVolume(0,0);player.seekTo((int)record.startMs);player.start();main.post(new Runnable(){public void run(){if(video!=player||!active||!host.canInteract()){if(video==player)stopPlayback();return;}if(player.getCurrentPosition()>=record.endMs){player.pause();return;}main.postDelayed(this,80);}});});player.setOnErrorListener((mp,a,b)->{if(video==player){stopPlayback();toast("원본 영상에 접근할 수 없어요. 파일을 다시 가져와 주세요.");}return true;});player.setVideoURI(Uri.parse(record.uri));
-    }
-
-    private void loadChoices(){
-        mood=prefs.getString("mood_"+month,"lake");if(!"sea".equals(mood)&&!"night".equals(mood))mood="lake";
-        caption=normalizedCaption(prefs.getString("caption_"+month,"이번 달, 기억하고 싶은 풍경."));
-        personalMode=prefs.getBoolean("personal_mode_"+month,!personalVideos.forMonth(month).isEmpty());
-    }
-
-    private List<ScenicCaptureStore.Record> monthlyRecords(){
-        ArrayList<ScenicCaptureStore.Record> result=new ArrayList<>();List<ScenicCaptureStore.Record> all=host.records();
-        if(all!=null)for(ScenicCaptureStore.Record record:all)if(record!=null&&month.equals(monthKey(record.createdAt)))result.add(record);
-        Collections.sort(result,(a,b)->Long.compare(b.createdAt,a.createdAt));return result;
-    }
-
-    private ArrayList<RecapVideoExporter.Frame> frames(){
-        ArrayList<RecapVideoExporter.Frame> result=new ArrayList<>();
-        if(personalMode){for(PersonalVideoStore.Record record:personalVideos.selected(month))result.add(new RecapVideoExporter.Frame(record.uri,record.startMs,record.endMs,record.title));return result;}
-        List<ScenicCaptureStore.Record> records=monthlyRecords();
-        if(records.isEmpty()&&sampleMode){
-            for(String key:new String[]{"haeundae","gwangalli","coast"})result.add(new RecapVideoExporter.Frame("scenic-demo/"+key+".jpg",location(key)+" · 샘플",credit(key)));
-        }else for(ScenicCaptureStore.Record record:records){
-            if(result.size()==MAX_FRAMES)break;String key=imageKey(record.imageKey);
-            result.add(new RecapVideoExporter.Frame("scenic-demo/"+key+".jpg",clean(record.segmentName,70)+" · 샘플",credit(key)));
-        }
-        return result;
-    }
-
+    private boolean legacySampleImport(RecapStoryPlanner.Story story){return story.moments.size()==1&&story.moments.get(0).video!=null&&"SCENIC_TEST_SAMPLE.mp4".equals(story.moments.get(0).video.title);}
+    private String storyMemoryLabel(RecapStoryPlanner.Story story){return legacySampleImport(story)?"샘플 리캡":story.memoryLabel;}
     private void render(){
         if(panel==null||destroyed)return;
-        panel.removeAllViews();editingControls.clear();captionEditor=null;posterCaption=null;
-        generateButton=null;playButton=null;saveButton=null;statusView=null;progressView=null;
-        List<ScenicCaptureStore.Record> records=monthlyRecords();
-        if(!records.isEmpty())sampleMode=false;
-        if(!busy&&!saving)restoreExport();
-        TextView eyebrow=text("MONTHLY RECAP",12,GREEN,true);eyebrow.setLetterSpacing(.13f);panel.addView(eyebrow);gap(panel,8);
-        panel.addView(text("이번 달을 한 편으로",28,INK,true));gap(panel,7);
-        panel.addView(text("좋아한 풍경에 음악과 한 줄의 기억을 더해요.",15,MUTED,false));gap(panel,24);
-        LinearLayout selector=row();selector.setGravity(Gravity.CENTER_VERTICAL);
-        List<String> months=months();int index=months.indexOf(month);
-        TextView previous=button("‹",false,()->selectAdjacent(1));previous.setContentDescription("이전 달 선택");previous.setTextSize(28);selector.addView(previous,size(56,56));
-        TextView monthButton=button(monthLabel(month)+"  ▾",false,this::showMonths);LinearLayout.LayoutParams monthParams=new LinearLayout.LayoutParams(0,dp(56),1);monthParams.setMargins(dp(10),0,dp(10),0);selector.addView(monthButton,monthParams);
-        TextView next=button("›",false,()->selectAdjacent(-1));next.setContentDescription("다음 달 선택");next.setTextSize(28);selector.addView(next,size(56,56));
-        previous.setEnabled(index>=0&&index<months.size()-1&&!busy&&!saving);next.setEnabled(index>0&&!busy&&!saving);
-        previous.setAlpha(previous.isEnabled()?1:.35f);next.setAlpha(next.isEnabled()?1:.35f);editingControls.add(monthButton);
-        panel.addView(selector,size(-1,-2));gap(panel,24);
-
-        LinearLayout mediaActions=row();TextView add=button("내 영상 가져오기",true,this::pickVideos);mediaActions.addView(add,new LinearLayout.LayoutParams(0,-2,1));editingControls.add(add);TextView mode=button(personalMode?"샘플 사진으로 전환":"내 영상으로 전환",false,()->{if(!allowed()||busy||saving||importing>0)return;personalMode=!personalMode;prefs.edit().putBoolean("personal_mode_"+month,personalMode).apply();sampleMode=!personalMode&&monthlyRecords().isEmpty();invalidateExport();render();});LinearLayout.LayoutParams modeParams=new LinearLayout.LayoutParams(0,-2,1);modeParams.setMargins(dp(8),0,0,0);mediaActions.addView(mode,modeParams);editingControls.add(mode);panel.addView(mediaActions,size(-1,-2));gap(panel,8);panel.addView(text(importing>0?"가져온 영상의 길이와 중복 여부를 확인하고 있어요…":"원본 영상은 변경하지 않아요. 같은 내용의 파일은 중복으로 추가하지 않아요.",12,MUTED,false));gap(panel,18);
-        if(personalMode){renderPersonalClips();if(personalVideos.forMonth(month).isEmpty()){renderEmpty();return;}}else if(records.isEmpty()&&!sampleMode){renderEmpty();return;}
-        LinearLayout provenance=column();provenance.setPadding(dp(16),dp(16),dp(16),dp(16));provenance.setBackground(background(SOFT,LINE,16));
-        provenance.addView(text(personalMode?"내 영상 리캡 · 선택 "+personalVideos.selected(month).size()+"개":sampleMode?"샘플 리캡 체험":"저장한 데모 장면 "+records.size()+"개",14,GREEN,true));gap(provenance,4);
-        provenance.addView(text(personalMode?"선택한 구간을 실제 움직이는 영상으로 만들어요. 원본 소리는 합성 배경음악으로 바꿔요.":sampleMode?"공개 사진 3장으로 체험해요. 실제 나의 주행 기록은 아니에요.":"저장한 장면은 샘플 사진이에요. 실제 차량 촬영이나 다른 운전자의 영상이 아니에요.",13,MUTED,false));
-        panel.addView(provenance,size(-1,-2));gap(panel,24);
-
-        LinearLayout layout=wide?row():column();layout.setGravity(Gravity.TOP);
-        View poster=poster(records);int posterWidth=wide?218:208;
-        LinearLayout.LayoutParams posterParams=size(posterWidth,Math.round(posterWidth*16f/9f));
-        if(!wide)posterParams.gravity=Gravity.CENTER_HORIZONTAL;
-        layout.addView(poster,posterParams);
-        LinearLayout details=column();LinearLayout.LayoutParams detailsParams=wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2);
-        if(wide)detailsParams.setMargins(dp(24),0,0,0);else detailsParams.setMargins(0,dp(22),0,0);layout.addView(details,detailsParams);
-        details.addView(text("영상에 담을 장면",18,INK,true));gap(details,6);
-        details.addView(text(personalMode?"선택한 영상 구간 "+personalVideos.selected(month).size()+"개 · 날짜순으로 이어 붙여요.":sampleMode?"해운대 · 광안리 · 청사포의 공개 사진":records.size()>MAX_FRAMES?"이번 달 저장한 장면 중 최근 "+MAX_FRAMES+"개를 사용해요.":"이 달에 저장한 "+records.size()+"개의 데모 장면을 사용해요.",13,MUTED,false));gap(details,12);
-        LinearLayout thumbnails=row();List<String> keys=new ArrayList<>();
-        if(!personalMode&&sampleMode)Collections.addAll(keys,"haeundae","gwangalli","coast");else if(!personalMode)for(int i=0;i<Math.min(MAX_FRAMES,records.size());i++)keys.add(imageKey(records.get(i).imageKey));
-        for(String key:keys){ImageView thumbnail=new ImageView(activity);thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);thumbnail.setImageBitmap(bitmap(key));thumbnail.setContentDescription(location(key)+" 샘플 사진");thumbnail.setBackground(background(SOFT,0,8));thumbnail.setClipToOutline(true);LinearLayout.LayoutParams thumb=new LinearLayout.LayoutParams(0,dp(58),1);thumb.setMargins(0,0,dp(6),0);thumbnails.addView(thumbnail,thumb);}if(!personalMode)details.addView(thumbnails,size(-1,58));gap(details,19);
-        details.addView(text("어떤 분위기로 남길까요?",17,INK,true));gap(details,10);
-        LinearLayout moods=row();addMood(moods,"lake","잔잔한 오후");addMood(moods,"sea","산뜻한 바다");addMood(moods,"night","도시의 밤");details.addView(moods,size(-1,-2));gap(details,5);
-        details.addView(text("앱에서 만든 오리지널 음악을 영상에 함께 담아요.",12,MUTED,false));gap(details,18);
-        details.addView(text("기억하고 싶은 한 줄",17,INK,true));gap(details,8);
-        captionEditor=new EditText(activity);captionEditor.setTextSize(15);captionEditor.setTextColor(INK);captionEditor.setHintTextColor(MUTED);captionEditor.setTypeface(ScenicTypography.font(activity,400));captionEditor.setGravity(Gravity.TOP);captionEditor.setMinLines(2);captionEditor.setMaxLines(3);captionEditor.setFilters(new InputFilter[]{new InputFilter.LengthFilter(60)});captionEditor.setPadding(dp(14),dp(12),dp(14),dp(12));captionEditor.setBackground(background(WHITE,LINE,10));captionEditor.setText(caption);captionEditor.setHint("예: 바다를 보며 오래 웃었던 오후");captionEditor.setContentDescription("영상에 넣을 기억 메모. 최대 60자");editingControls.add(captionEditor);
-        captionEditor.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){caption=s.toString();prefs.edit().putString("caption_"+month,caption).apply();invalidateExport();if(posterCaption!=null)posterCaption.setText(displayCaption());updateControls();}public void afterTextChanged(Editable e){}});
-        details.addView(captionEditor,size(-1,-2));gap(details,5);details.addView(text("최대 60자 · 이 기기에 저장하고 영상에 자막으로 넣어요.",12,MUTED,false));gap(details,9);
-        TextView voice=button("음성으로 메모",false,this::requestVoice);details.addView(voice,size(-1,-2));editingControls.add(voice);gap(details,5);
-        details.addView(text("누르면 설치된 음성 입력 앱이 열려요. 음성은 해당 제공자가 처리할 수 있어요.",12,MUTED,false));gap(details,19);
-        generateButton=button(exportedFile==null?"음악을 입혀 리캡 만들기":"새 리캡 만들기",true,this::generate);details.addView(generateButton,size(-1,-2));gap(details,8);
-        TextView format=text("세로 9:16  ·  약 "+Math.round(RecapVideoExporter.durationSeconds(frames()))+"초  ·  "+(personalMode?"움직이는 영상과 음악":"사진과 음악"),12,MUTED,false);format.setGravity(Gravity.CENTER);details.addView(format,size(-1,-2));
-        panel.addView(layout,size(-1,-2));gap(panel,24);
-        progressView=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);progressView.setMax(100);progressView.setProgressTintList(ColorStateList.valueOf(GREEN));panel.addView(progressView,size(-1,5));gap(panel,9);
-        statusView=text(status.isEmpty()?(exportedFile!=null?"리캡이 준비됐어요. 재생하거나 동영상으로 저장해 보세요.":"장면과 음악을 골랐으면 나만의 한 줄을 더해 보세요."):status,14,MUTED,false);statusView.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);panel.addView(statusView);gap(panel,12);
-        LinearLayout actions=row();playButton=button("리캡 재생",false,this::play);saveButton=button(savedUri==null?"동영상 저장":"저장 완료",false,this::saveToGallery);
-        LinearLayout.LayoutParams actionA=new LinearLayout.LayoutParams(0,-2,1);actionA.setMargins(0,0,dp(8),0);actions.addView(playButton,actionA);actions.addView(saveButton,new LinearLayout.LayoutParams(0,-2,1));panel.addView(actions,size(-1,-2));gap(panel,18);
-        TextView sources=button(personalMode?"영상과 음악 정보":"사진 출처와 음악 정보",false,this::showSources);panel.addView(sources,size(-1,-2));editingControls.add(sources);gap(panel,7);
-        panel.addView(text(personalMode?"가져온 영상은 기기에서만 처리해요. 원본 소리는 리캡에 포함하지 않으며 외부 서버에 전송하지 않아요.":"샘플 사진의 출처와 라이선스는 영상 마지막 장면에도 표시해요. 공개 공유 서버로 전송하지 않아요.",12,MUTED,false));updateControls();
+        if(opened!=null){feedScroll.setVisibility(View.GONE);renderStory(opened);return;}
+        if(storyView!=null){storyView.destroy();experienceRoot.removeView(storyView);storyView=null;visibleStoryPhotos=Collections.emptyList();}
+        feedScroll.setVisibility(View.VISIBLE);panel.removeAllViews();controls.clear();if(archive){renderArchive();return;}
+        panel.addView(text("다시 꺼내보는 여행",32,INK,true));gap(panel,8);panel.addView(text("자동으로 모은 그날의 순간들",17,MUTED,false));gap(panel,24);
+        ArrayList<RecapStoryPlanner.Story> real=new ArrayList<>(),samples=new ArrayList<>();for(RecapStoryPlanner.Story story:stories())(story.sample?samples:real).add(story);
+        if(real.isEmpty())renderEmpty();else{
+            panel.addView(storyCard(real.get(0),true),size(-1,-2));gap(panel,24);
+            if(real.size()>1){panel.addView(text("지난 여행의 기억",24,INK,true));gap(panel,16);for(int i=1;i<Math.min(5,real.size());){LinearLayout line=wide?row():column();for(int col=0;col<(wide?2:1)&&i<Math.min(5,real.size());col++,i++){LinearLayout.LayoutParams p=wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2);if(col>0)p.setMargins(dp(16),0,0,0);line.addView(storyCard(real.get(i),false),p);}panel.addView(line,size(-1,-2));gap(panel,16);}}
+        }
+        if(imports>0||scanning){panel.addView(text(imports>0?"여행 장면을 고르고 있어요 · "+imports+"개":"새 여행 영상을 확인하고 있어요",16,ACCENT,false));gap(panel,16);}
+        addStatus();gap(panel,8);renderSourceControls();
+        if(real.isEmpty()){gap(panel,16);RecapStoryPlanner.Story sample=samples.isEmpty()?sampleStory():samples.get(0);panel.addView(button("샘플 추억 보기",false,()->openStory(sample)),size(-1,-2));}
+        gap(panel,24);panel.addView(button("모든 기록 보기",false,()->{if(!allowed())return;archive=true;archivePage=0;status="";render();scrollTop();}),size(-1,-2));
     }
-
     private void renderEmpty(){
-        LinearLayout empty=column();empty.setGravity(Gravity.CENTER_HORIZONTAL);empty.setPadding(dp(28),dp(34),dp(28),dp(32));empty.setBackground(background(SOFT,0,18));
-        TextView icon=text("▤",40,GREEN,false);empty.addView(icon);gap(empty,15);
-        TextView title=text("아직 저장한 장면이 없어요",21,INK,true);title.setGravity(Gravity.CENTER);empty.addView(title);gap(empty,9);
-        TextView message=text("풍경 기록에 장면을 남기면\n이곳에서 한 달의 리캡을 만들 수 있어요.",15,MUTED,false);message.setGravity(Gravity.CENTER);empty.addView(message);gap(empty,22);
-        TextView sample=button("샘플 리캡 체험",true,()->{if(!allowed())return;sampleMode=true;personalMode=false;prefs.edit().putBoolean("personal_mode_"+month,false).apply();status="공개 사진으로 체험 중이에요. 나의 주행 이력에는 추가하지 않아요.";render();});empty.addView(sample,size(-1,-2));editingControls.add(sample);gap(empty,9);
-        TextView records=button("풍경 기록으로",false,()->{if(allowed())host.onOpenRecords();});empty.addView(records,size(-1,-2));editingControls.add(records);gap(empty,12);
-        TextView note=text("공개 사진으로 먼저 체험할 수 있어요.\n실제 촬영 기록을 만들거나 추가하지 않아요.",12,MUTED,false);note.setGravity(Gravity.CENTER);empty.addView(note);panel.addView(empty,size(-1,-2));updateControls();
+        LinearLayout card=column();card.setPadding(dp(28),dp(32),dp(28),dp(32));card.setBackground(background(WHITE,LINE,ScenicDesign.CARD_RADIUS));card.addView(text("여행이 끝나면,\n추억이 시작돼요",30,INK,true));gap(card,16);card.addView(text("여행 영상에서 좋은 장면을 골라 사진과 리캡으로 모아둘게요.",18,MUTED,false));gap(card,24);
+        card.addView(button(prefs.getString("recap_source_tree","").isEmpty()?"빌트인캠 폴더 연결":"연결한 영상 확인",true,()->{if(prefs.getString("recap_source_tree","").isEmpty())connectFolder();else if(allowed())scanFolder();}),size(-1,-2));panel.addView(card,size(-1,-2));gap(panel,24);
     }
-
-    private View poster(List<ScenicCaptureStore.Record> records){
-        String key=records.isEmpty()?"gwangalli":imageKey(records.get(0).imageKey);
-        FrameLayout frame=new FrameLayout(activity);frame.setBackground(background(INK,0,18));frame.setClipToOutline(true);frame.setContentDescription(personalMode?"가져온 영상의 세로 리캡 미리보기":"9대16 샘플 리캡 미리보기. 실제 차량 촬영 아님.");
-        ImageView photo=new ImageView(activity);photo.setImageBitmap(personalMode?personalPoster():bitmap(key));photo.setScaleType(ImageView.ScaleType.CENTER_CROP);frame.addView(photo,new FrameLayout.LayoutParams(-1,-1));
-        View scrim=new View(activity);scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0x251c2924,0x001c2924,0xe51c2924}));frame.addView(scrim,new FrameLayout.LayoutParams(-1,-1));
-        TextView tag=text(personalMode?"내 영상  ·  9:16":"샘플 리캡  ·  9:16",11,WHITE,true);tag.setPadding(dp(10),dp(7),dp(10),dp(7));tag.setBackground(background(0x88352947,0,20));FrameLayout.LayoutParams tagParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.START);tagParams.setMargins(dp(14),dp(16),dp(12),0);frame.addView(tag,tagParams);
-        LinearLayout labels=column();labels.setPadding(dp(18),0,dp(18),dp(20));TextView brand=text("SCENIC",12,0xffd9e7da,true);brand.setLetterSpacing(.14f);labels.addView(brand);gap(labels,8);labels.addView(text(monthLabel(month),22,WHITE,true));gap(labels,7);posterCaption=text(displayCaption(),14,WHITE,false);posterCaption.setMaxLines(4);labels.addView(posterCaption);gap(labels,13);labels.addView(text(personalMode?"사용자가 가져온 영상":"공개 사진 · 실제 주행 영상 아님",10,0xffe1e8e1,false));FrameLayout.LayoutParams labelParams=new FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM);frame.addView(labels,labelParams);return frame;
+    private View storyCard(RecapStoryPlanner.Story story,boolean hero){
+        boolean landscape=hero&&wide;
+        LinearLayout card=landscape?row():column();card.setGravity(Gravity.CENTER_VERTICAL);card.setBackground(background(WHITE,LINE,ScenicDesign.CARD_RADIUS));card.setClipToOutline(true);
+        List<MemoryPhoto> selected=photos(story);FrameLayout artwork=new FrameLayout(activity);artwork.setBackgroundColor(SOFT);
+        ImageView cover=new ImageView(activity);cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        Bitmap image=selected.isEmpty()?originalThumbnail(story):photoBitmap(selected.get(0));if(image!=null)cover.setImageBitmap(image);cover.setContentDescription(story.title);artwork.addView(cover,new FrameLayout.LayoutParams(-1,-1));
+        TextView badge=text(storyMemoryLabel(story),18,WHITE,true);badge.setPadding(dp(14),dp(9),dp(14),dp(9));badge.setBackground(background(ACCENT,0,8));FrameLayout.LayoutParams badgeParams=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.START);badgeParams.setMargins(dp(16),dp(16),dp(16),0);artwork.addView(badge,badgeParams);
+        card.addView(artwork,landscape?new LinearLayout.LayoutParams(0,dp(410),1.4f):size(-1,hero?270:250));
+        LinearLayout details=column();details.setPadding(dp(28),dp(24),dp(28),dp(24));details.addView(text(story.title,hero?32:24,INK,true));gap(details,14);details.addView(text(story.dateLabel,hero?20:17,MUTED,false));if(!story.place.isEmpty()){gap(details,8);details.addView(text(story.place,18,MUTED,false));}gap(details,24);details.addView(button(selected.isEmpty()?"기록 보기":"추억 보기",hero,()->openStory(story)),size(-1,-2));card.addView(details,landscape?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2));return card;
     }
-
-    private void addMood(LinearLayout row,String key,String label){
-        TextView option=button(label,key.equals(mood),()->{if(!allowed()||busy||saving||importing>0)return;mood=key;prefs.edit().putString("mood_"+month,mood).apply();invalidateExport();render();});option.setTextSize(13);option.setPadding(dp(6),dp(13),dp(6),dp(13));LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(0,-2,1);params.setMargins(0,0,dp(5),0);row.addView(option,params);editingControls.add(option);
+    private void renderSourceControls(){boolean connected=!prefs.getString("recap_source_tree","").isEmpty();LinearLayout actions=wide?row():column();if(connected||archive||!personalVideos.all().isEmpty())addAction(actions,button(connected?"빌트인캠 폴더 변경":"빌트인캠 폴더 연결",false,this::connectFolder));addAction(actions,button("여행 영상 연결",false,this::pickVideos));panel.addView(actions,size(-1,-2));if(!sourceError.isEmpty()){gap(panel,8);panel.addView(text(sourceError,16,MUTED,false));}}
+    private void renderArchive(){
+        panel.addView(button("‹ 리캡으로 돌아가기",false,()->{archive=false;render();scrollTop();}),size(-1,-2));gap(panel,24);panel.addView(text("모든 기록",32,INK,true));gap(panel,24);List<RecapStoryPlanner.Story> all=new ArrayList<>(stories());all.sort((a,b)->Long.compare(b.endedAt,a.endedAt));int pageSize=8;archivePage=Math.max(0,Math.min(archivePage,Math.max(0,(all.size()-1)/pageSize)));if(all.isEmpty()){panel.addView(text("아직 저장된 여행이 없어요",22,INK,true));gap(panel,24);}else for(int i=archivePage*pageSize;i<Math.min(all.size(),(archivePage+1)*pageSize);){LinearLayout line=wide?row():column();for(int col=0;col<(wide?2:1)&&i<Math.min(all.size(),(archivePage+1)*pageSize);col++,i++){LinearLayout.LayoutParams p=wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2);if(col>0)p.setMargins(dp(16),0,0,0);line.addView(storyCard(all.get(i),false),p);}panel.addView(line,size(-1,-2));gap(panel,16);}
+        if(all.size()>pageSize){LinearLayout pages=row();TextView before=button("이전",false,()->{archivePage--;render();scrollTop();}),next=button("다음",false,()->{archivePage++;render();scrollTop();});before.setTag(archivePage>0);next.setTag((archivePage+1)*pageSize<all.size());before.setEnabled(archivePage>0);next.setEnabled((archivePage+1)*pageSize<all.size());pages.addView(before,new LinearLayout.LayoutParams(0,-2,1));TextView page=text((archivePage+1)+" / "+((all.size()+pageSize-1)/pageSize),17,MUTED,false);page.setGravity(Gravity.CENTER);pages.addView(page,size(96,-2));pages.addView(next,new LinearLayout.LayoutParams(0,-2,1));panel.addView(pages);gap(panel,24);}
+        renderArchiveOriginals(all.subList(archivePage*pageSize,Math.min(all.size(),(archivePage+1)*pageSize)));
+        panel.addView(button("주행 기록·북마크",false,()->{if(allowed())host.onOpenRecords();}),size(-1,-2));gap(panel,16);renderSourceControls();addStatus();
     }
-
-    private void selectAdjacent(int offset){if(!allowed()||busy||saving||importing>0)return;List<String> months=months();int next=months.indexOf(month)+offset;if(next>=0&&next<months.size())selectMonth(months.get(next));}
-    private void selectMonth(String value){if(!allowed()||busy||saving||importing>0)return;month=value;mediaPage=0;sampleMode=false;status="";exportedFile=null;savedUri=null;loadChoices();render();}
-    private List<String> months(){
-        TreeSet<String> keys=new TreeSet<>(Collections.reverseOrder());Calendar calendar=Calendar.getInstance();for(int i=0;i<12;i++){keys.add(monthKey(calendar.getTimeInMillis()));calendar.add(Calendar.MONTH,-1);}
-        List<ScenicCaptureStore.Record> all=host.records();if(all!=null)for(ScenicCaptureStore.Record record:all)if(record!=null)keys.add(monthKey(record.createdAt));for(PersonalVideoStore.Record record:personalVideos.all())keys.add(record.month());keys.add(month);return new ArrayList<>(keys);
+    private void renderArchiveOriginals(List<RecapStoryPlanner.Story> page){
+        LinkedHashMap<String,PersonalVideoStore.Record> originals=new LinkedHashMap<>();
+        for(RecapStoryPlanner.Story story:page)for(RecapStoryPlanner.Moment moment:story.moments)if(moment.video!=null)originals.put(moment.video.id,moment.video);
+        if(originals.isEmpty())return;
+        gap(panel,8);panel.addView(text("원본 영상",24,INK,true));gap(panel,12);
+        for(PersonalVideoStore.Record original:originals.values()){
+            LinearLayout file=row();file.setGravity(Gravity.CENTER_VERTICAL);file.setPadding(dp(18),dp(12),dp(12),dp(12));file.setBackground(background(WHITE,LINE,ScenicDesign.CONTROL_RADIUS));
+            TextView label=text(original.title,18,INK,false);label.setMaxLines(2);label.setEllipsize(android.text.TextUtils.TruncateAt.END);file.addView(label,new LinearLayout.LayoutParams(0,-2,1));
+            TextView download=button(originalDownloads.saving()?"저장 중…":"다운로드",false,()->downloadOriginal(original));download.setTextSize(ScenicTypography.size(14));download.setPadding(dp(14),dp(8),dp(14),dp(8));download.setContentDescription(original.title+" 원본 영상 다운로드");download.setTag(!originalDownloads.saving());download.setEnabled(!originalDownloads.saving());
+            LinearLayout.LayoutParams action=size(-2,-2);action.setMargins(dp(16),0,0,0);file.addView(download,action);panel.addView(file,size(-1,-2));gap(panel,8);
+        }
+        gap(panel,16);
     }
-    private void showMonths(){if(!allowed()||busy||saving||importing>0)return;final List<String> keys=months();String[] labels=new String[keys.size()];for(int i=0;i<keys.size();i++)labels[i]=monthLabel(keys.get(i));dialog=new AlertDialog.Builder(activity).setTitle("어느 달을 돌아볼까요?").setSingleChoiceItems(labels,keys.indexOf(month),(dlg,which)->{dlg.dismiss();dialog=null;if(allowed())selectMonth(keys.get(which));}).setNegativeButton("닫기",null).create();dialog.show();}
-
-    private void generate(){
-        if(!allowed()||busy||saving||importing>0)return;final ArrayList<RecapVideoExporter.Frame> selection=frames();if(selection.isEmpty()){toast("먼저 저장한 장면이나 샘플 리캡을 선택해 주세요.");return;}
-        if(captionEditor!=null){captionEditor.clearFocus();InputMethodManager keyboard=(InputMethodManager)activity.getSystemService(Activity.INPUT_METHOD_SERVICE);if(keyboard!=null)keyboard.hideSoftInputFromWindow(captionEditor.getWindowToken(),0);}
-        stopPlayback();busy=true;progress=0;status=personalMode?"선택한 영상 구간과 음악으로 리캡을 만들고 있어요. 잠시만 기다려 주세요.":"사진과 음악으로 리캡을 만들고 있어요. 잠시만 기다려 주세요.";updateControls();
-        final int token=++generation;final AtomicBoolean cancel=new AtomicBoolean();cancellation=cancel;
-        final String chosenMonth=exportKey(),chosenMood=mood,chosenCaption=monthLabel(month)+(personalMode?" · 나의 리캡\n":" · 샘플 리캡\n")+normalizedCaption(caption),signature=signature();
-        final File output=new File(recapDir(),(personalMode?"SCENIC_PERSONAL_":"SCENIC_SAMPLE_")+month.replace("-","")+"_"+System.currentTimeMillis()+".mp4");
-        job=worker.submit(()->{
-            try{
-                RecapVideoExporter.export(activity.getApplicationContext(),selection,chosenMood,chosenCaption,output,()->cancel.get()||Thread.currentThread().isInterrupted(),percent->main.post(()->{if(current(token,cancel)){progress=percent;updateControls();}}));
-                if(cancel.get()){output.delete();return;}
-                main.post(()->{
-                    if(!current(token,cancel)){output.delete();return;}
-                    busy=false;job=null;exportedFile=output;savedUri=null;progress=100;
-                    String previous=prefs.getString("file_"+chosenMonth,"");prefs.edit().putString("file_"+chosenMonth,output.getName()).putString("signature_"+chosenMonth,signature).remove("saved_"+chosenMonth).apply();
-                    if(!previous.equals(output.getName())&&previous.matches("SCENIC_(?:SAMPLE|PERSONAL)_[A-Za-z0-9_.-]+\\.mp4"))new File(recapDir(),previous).delete();
-                    status="리캡이 완성됐어요. 음악이 담긴 실제 영상으로 재생할 수 있어요.";render();
-                });
-            }catch(Exception error){output.delete();main.post(()->{if(!current(token,cancel))return;busy=false;job=null;status="영상 제작을 마치지 못했어요. 정차 상태에서 다시 시도해 주세요.";android.util.Log.w("ScenicRecap","Local movie generation failed",error);updateControls();});}
-        });
+    private void downloadOriginal(PersonalVideoStore.Record original){
+        if(!allowed()||originalDownloads.saving())return;
+        status="원본 영상을 저장하고 있어요";
+        originalDownloads.save(original,(success,message)->{if(destroyed)return;status=message;if(active){render();toast(message);}});
+        render();
     }
-
-    private void play(){
-        if(!allowed()||busy||saving||exportedFile==null||!exportedFile.isFile())return;stopPlayback();
-        LinearLayout body=column();body.setPadding(dp(20),dp(18),dp(20),dp(18));body.setBackgroundColor(WHITE);body.addView(text(monthLabel(month)+(personalMode?" · 나의 리캡":" · 샘플 리캡"),20,INK,true));gap(body,5);body.addView(text(personalMode?"가져온 영상과 합성 음악으로 만든 리캡":"공개 사진으로 만든 영상 · 실제 차량 촬영 아님",12,MUTED,false));gap(body,12);
-        int height=Math.max(dp(180),Math.min(dp(450),activity.getResources().getDisplayMetrics().heightPixels-dp(220)));FrameLayout stage=new FrameLayout(activity);stage.setBackgroundColor(INK);video=new VideoView(activity);final VideoView player=video;player.setAudioFocusRequest(AudioManager.AUDIOFOCUS_GAIN);FrameLayout.LayoutParams videoParams=new FrameLayout.LayoutParams(Math.round(height*9f/16f),height,Gravity.CENTER);stage.addView(player,videoParams);body.addView(stage,new LinearLayout.LayoutParams(-1,height));gap(body,12);
-        TextView toggle=button("일시정지",false,()->{if(!allowed())return;if(video!=player)return;if(player.isPlaying()){player.pause();}else player.start();});body.addView(toggle,size(-1,-2));gap(body,8);body.addView(button("닫기",true,this::stopPlayback),size(-1,-2));
-        dialog=new AlertDialog.Builder(activity).setView(body).create();dialog.setOnDismissListener(dlg->{if(video==player){try{player.stopPlayback();}catch(RuntimeException ignored){}video=null;}dialog=null;});dialog.show();Window window=dialog.getWindow();if(window!=null)window.setLayout(Math.min(dp(540),activity.getResources().getDisplayMetrics().widthPixels-dp(36)),-2);
-        toggle.setOnClickListener(v->{if(!allowed()||video!=player)return;if(player.isPlaying()){player.pause();toggle.setText("이어 재생");}else{player.start();toggle.setText("일시정지");}});
-        player.setOnPreparedListener(mp->{if(video!=player||!active||!host.canInteract()){stopPlayback();return;}mp.setLooping(false);player.start();});
-        player.setOnCompletionListener(mp->{if(video==player)toggle.setText("다시 재생");});
-        player.setOnErrorListener((mp,what,extra)->{if(video==player){stopPlayback();status="영상을 재생할 수 없어요. 새 리캡을 만들어 다시 시도해 주세요.";updateControls();}return true;});
-        player.setVideoURI(Uri.fromFile(exportedFile));
+    private void openStory(RecapStoryPlanner.Story story){if(!allowed())return;stopPlayback();opened=story;status="";render();}
+    private void renderStory(RecapStoryPlanner.Story story){
+        if(storyView==null){
+            storyView=new RecapStoryView(activity,new RecapStoryView.Host(){
+                public boolean canInteract(){return active&&!destroyed&&host.canInteract();}
+                public void onBack(){if(!allowed())return;opened=null;status="";render();scrollTop();}
+                public void onSaveVideo(){if(opened==null)return;File movie=movieFile(opened);if(movie!=null)saveMedia(movie,"video/mp4",opened.id);}
+                public void onSavePhoto(int index){if(opened!=null&&index>=0&&index<visibleStoryPhotos.size())savePhoto(visibleStoryPhotos.get(index),opened);}
+                public void onRetryMovie(){if(opened!=null&&allowed()){moviesFailed.remove(opened.id);ensureMovie(opened);render();}}
+            },wide);
+            experienceRoot.addView(storyView,new FrameLayout.LayoutParams(-1,-1));
+        }
+        visibleStoryPhotos=photos(story);ArrayList<RecapStoryView.Photo> shown=new ArrayList<>();
+        for(MemoryPhoto photo:visibleStoryPhotos)shown.add(new RecapStoryView.Photo(photoBitmap(photo),photo.label,photo.credit));
+        storyView.bind(story.id,story.title,story.dateLabel+(story.place.isEmpty()?"":" · "+story.place),storyMemoryLabel(story),shown,movieFile(story),movieProgress,story.id.equals(movieStory),moviesFailed.contains(story.id),saving,status);
+        if(active)storyView.resume();ensureMovie(story);
     }
-
-    private void saveToGallery(){
-        if(!allowed()||busy||saving||exportedFile==null||!exportedFile.isFile())return;
-        if(savedUri!=null){toast("이미 동영상으로 저장한 리캡이에요.");return;}
-        if(Build.VERSION.SDK_INT<29){toast("리캡이 앱 안에 저장되어 있어요. 여기서 언제든 재생할 수 있어요.");return;}
-        saving=true;status="동영상 앨범에 저장하고 있어요.";updateControls();final File source=exportedFile;final String chosenMonth=exportKey();final int token=++generation;final AtomicBoolean cancel=new AtomicBoolean();cancellation=cancel;
-        job=worker.submit(()->{
-            Uri uri=null;try{
-                ContentValues values=new ContentValues();values.put(MediaStore.Video.Media.DISPLAY_NAME,source.getName());values.put(MediaStore.Video.Media.MIME_TYPE,"video/mp4");values.put(MediaStore.Video.Media.RELATIVE_PATH,Environment.DIRECTORY_MOVIES+"/SCENIC");values.put(MediaStore.Video.Media.IS_PENDING,1);values.put(MediaStore.Video.Media.DESCRIPTION,personalMode?"SCENIC 개인 리캡. 사용자가 가져온 영상과 합성 음악.":"SCENIC 샘플 리캡. 공개 사진과 앱에서 합성한 오리지널 음악. 사진 출처와 라이선스는 마지막 장면에 포함.");
-                uri=activity.getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,values);if(uri==null)throw new IllegalStateException("MediaStore unavailable");
-                try(InputStream in=new FileInputStream(source);OutputStream out=activity.getContentResolver().openOutputStream(uri)){if(out==null)throw new IllegalStateException("Video output unavailable");byte[] bytes=new byte[32768];int count;while((count=in.read(bytes))!=-1){if(cancel.get()||Thread.currentThread().isInterrupted())throw new InterruptedException();out.write(bytes,0,count);}}
-                if(cancel.get())throw new InterruptedException();values.clear();values.put(MediaStore.Video.Media.IS_PENDING,0);activity.getContentResolver().update(uri,values,null,null);
-                final Uri published=uri;main.post(()->{if(!current(token,cancel)){deletePublished(published);return;}prefs.edit().putString("saved_"+chosenMonth,published.toString()).apply();saving=false;job=null;savedUri=published;status="동영상 앨범의 SCENIC 폴더에 저장했어요.";render();});
-            }catch(Exception error){if(uri!=null)deletePublished(uri);main.post(()->{if(!current(token,cancel))return;saving=false;job=null;status="앨범에 저장하지 못했어요. 만든 영상은 앱 안에 그대로 있어요.";updateControls();});}
-        });
+    private void ensureMovie(RecapStoryPlanner.Story story){
+        if(movieFile(story)!=null||!movieStory.isEmpty()||moviesFailed.contains(story.id)||!active||!host.canInteract())return;List<MemoryPhoto> chosen=photos(story);if(chosen.isEmpty())return;ArrayList<RecapVideoExporter.Frame> frames=new ArrayList<>();for(MemoryPhoto p:chosen)frames.add(p.video==null?new RecapVideoExporter.Frame(p.asset,p.label+" · 샘플",p.credit):new RecapVideoExporter.Frame(p.video.uri,p.scene.startMs,p.scene.endMs,story.place.isEmpty()?story.dateLabel:story.place));
+        final String signature=movieSignature(story);final File output=new File(recapDir(),"NOOBY_AUTO_"+story.id+"_"+System.currentTimeMillis()+".mp4");final AtomicBoolean cancel=new AtomicBoolean();movieCancel=cancel;movieStory=story.id;movieProgress=0;
+        worker.submit(()->{try{RecapVideoExporter.export(activity,frames,story.place.contains("바다")||story.place.contains("부산")?"sea":"lake",story.dateLabel+"\n"+story.title+(story.sample?" · 샘플":""),output,()->destroyed||cancel.get()||Thread.currentThread().isInterrupted(),percent->main.post(()->{if(!destroyed&&!cancel.get()){movieProgress=percent;if(active&&opened!=null&&opened.id.equals(story.id))render();}}));if(cancel.get()||destroyed){output.delete();return;}String previous=prefs.getString("auto_file_"+story.id,"");prefs.edit().putString("auto_file_"+story.id,output.getName()).putString("auto_signature_"+story.id,signature).apply();if(!previous.equals(output.getName())&&previous.matches("NOOBY_AUTO_[a-f0-9-]+_[0-9]+\\.mp4"))new File(recapDir(),previous).delete();}catch(Exception error){output.delete();if(!cancel.get())main.post(()->moviesFailed.add(story.id));}finally{main.post(()->{if(movieCancel==cancel){movieCancel=null;movieStory="";}if(!destroyed&&active)render();});}});
     }
-
-    private void showSources(){
-        if(!allowed())return;String attribution;
-        try(InputStream input=activity.getAssets().open("scenic-demo/ATTRIBUTION.txt");ByteArrayOutputStream bytes=new ByteArrayOutputStream()){byte[] block=new byte[2048];int read;while((read=input.read(block))!=-1)bytes.write(block,0,read);attribution=new String(bytes.toByteArray(),StandardCharsets.UTF_8);}catch(Exception unavailable){attribution=credit("haeundae")+"\n"+credit("gwangalli")+"\n"+credit("coast");}
-        LinearLayout body=column();body.setPadding(dp(22),dp(20),dp(22),dp(20));body.addView(text("사진 출처와 음악",22,INK,true));gap(body,12);body.addView(text(personalMode?"가져온 영상에서 선택한 구간을 세로 화면에 맞춰 잘라 실제 움직이는 리캡을 만들어요. 원본 소리는 넣지 않고 앱에서 합성한 음악을 사용합니다. 원본 영상은 변경하거나 업로드하지 않아요.":"리캡은 공개 사진을 세로 화면에 맞춰 자르고 자막을 더한 영상이에요. 실제 차량이나 다른 운전자의 촬영물이 아니에요.\n\n배경음악은 선택한 분위기에 맞춰 앱 안에서 합성한 오리지널 사운드예요. 외부 음원이나 음악 서비스는 사용하지 않아요.",14,INK,false));gap(body,18);TextView sources=text(personalMode?"영상: 사용자가 직접 선택한 파일\n음악: SCENIC 오리지널 신시사이저\n목록에서 제거해도 원본 파일과 갤러리의 리캡은 유지됩니다.":attribution,12,MUTED,false);sources.setTextIsSelectable(true);body.addView(sources);ScrollView scroll=new ScrollView(activity);scroll.addView(body);dialog=new AlertDialog.Builder(activity).setView(scroll).setPositiveButton("확인",null).create();dialog.show();
+    private File movieFile(RecapStoryPlanner.Story story){if(!movieSignature(story).equals(prefs.getString("auto_signature_"+story.id,"")))return null;String name=prefs.getString("auto_file_"+story.id,"");if(!name.matches("NOOBY_AUTO_[a-f0-9-]+_[0-9]+\\.mp4"))return null;File file=new File(recapDir(),name);return file.isFile()&&file.length()>0?file:null;}
+    private String movieSignature(RecapStoryPlanner.Story story){StringBuilder value=new StringBuilder("auto-v2-bottom-title:").append(story.id);for(MemoryPhoto p:photos(story))value.append('|').append(p.video==null?p.asset:p.video.id+":"+p.scene.timestampMs);return hash(value.toString());}
+    private void playUri(Uri uri,String title){
+        if(!allowed())return;stopPlayback();LinearLayout body=column();body.setPadding(dp(24),dp(24),dp(24),dp(24));body.addView(text(title,24,INK,true));gap(body,16);
+        int height=Math.max(dp(180),Math.min(dp(520),activity.getResources().getDisplayMetrics().heightPixels-dp(260)));
+        FrameLayout stage=new FrameLayout(activity);stage.setBackgroundColor(0xff101820);VideoView player=new VideoView(activity);video=player;stage.addView(player,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));body.addView(stage,new LinearLayout.LayoutParams(-1,height));
+        MediaController controller=new MediaController(activity);controller.setAnchorView(stage);player.setMediaController(controller);gap(body,16);body.addView(button("닫기",false,this::stopPlayback),size(-1,-2));
+        dialog=new AlertDialog.Builder(activity).setView(body).create();dialog.setOnDismissListener(d->{if(video==player){player.stopPlayback();video=null;}dialog=null;});dialog.show();if(dialog.getWindow()!=null)dialog.getWindow().setLayout(Math.min(dp(1000),activity.getResources().getDisplayMetrics().widthPixels-dp(64)),-2);
+        player.setOnPreparedListener(mp->{if(active&&host.canInteract()&&video==player){int width=Math.max(1,mp.getVideoWidth()),mediaHeight=Math.max(1,mp.getVideoHeight());int fittedWidth=Math.min(stage.getWidth(),Math.round(height*(float)width/mediaHeight));int fittedHeight=Math.min(height,Math.round(fittedWidth*(float)mediaHeight/width));player.setLayoutParams(new FrameLayout.LayoutParams(fittedWidth,fittedHeight,Gravity.CENTER));player.start();}else stopPlayback();});
+        player.setOnErrorListener((mp,a,b)->{stopPlayback();toast("영상을 열 수 없어요. 원본 연결을 확인해 주세요.");return true;});player.setVideoURI(uri);
     }
-
-    private void updateControls(){
-        boolean enabled=active&&!destroyed&&host.canInteract()&&!busy&&!saving&&importing==0;
-        for(View control:editingControls){control.setEnabled(enabled);control.setAlpha(enabled?1:.5f);}
-        if(generateButton!=null){generateButton.setEnabled(enabled&&!frames().isEmpty());generateButton.setAlpha(generateButton.isEnabled()?1:.55f);generateButton.setText(busy?"리캡 만드는 중  "+progress+"%":exportedFile==null?"음악을 입혀 리캡 만들기":"새 리캡 만들기");}
-        if(playButton!=null){playButton.setEnabled(enabled&&exportedFile!=null);playButton.setAlpha(playButton.isEnabled()?1:.4f);}
-        if(saveButton!=null){saveButton.setEnabled(enabled&&exportedFile!=null&&savedUri==null);saveButton.setAlpha(saveButton.isEnabled()?1:.4f);saveButton.setText(saving?"저장 중…":savedUri!=null?"저장 완료":"동영상 저장");}
-        if(progressView!=null){progressView.setVisibility(busy?View.VISIBLE:View.GONE);progressView.setProgress(progress);}
-        if(statusView!=null){String message=!host.canInteract()?"정차 후 리캡을 만들고 재생할 수 있어요.":status;statusView.setText(message.isEmpty()?(exportedFile!=null?"리캡이 준비됐어요. 재생하거나 동영상으로 저장해 보세요.":"장면과 음악을 골랐으면 나만의 한 줄을 더해 보세요."):message);}
+    private void stopPlayback(){VideoView old=video;video=null;if(old!=null){try{old.stopPlayback();}catch(RuntimeException ignored){}if(dialog!=null){AlertDialog d=dialog;dialog=null;d.dismiss();}}}
+    private void savePhoto(MemoryPhoto photo,RecapStoryPlanner.Story story){if(photo.path!=null)saveMedia(new File(photo.path),"image/jpeg",hash(photo.path));else toast("샘플 사진은 출처가 표시된 리캡 영상으로 저장할 수 있어요.");}
+    private void saveMedia(File file,String mime,String key){
+        if(!allowed()||saving)return;final String saveKey=mime+hash(file.getAbsolutePath());if(Build.VERSION.SDK_INT<29){toast("추억이 앱 안에 저장되어 있어요.");return;}if(prefs.contains("auto_saved_"+saveKey)){toast("이미 앨범에 저장했어요.");return;}saving=true;status="앨범에 저장하고 있어요";render();
+        worker.submit(()->{Uri destination=null;try{boolean movie=mime.startsWith("video");ContentValues values=new ContentValues();values.put(MediaStore.MediaColumns.DISPLAY_NAME,file.getName());values.put(MediaStore.MediaColumns.MIME_TYPE,mime);values.put(MediaStore.MediaColumns.RELATIVE_PATH,(movie?Environment.DIRECTORY_MOVIES:Environment.DIRECTORY_PICTURES)+"/누비길");values.put(MediaStore.MediaColumns.IS_PENDING,1);destination=activity.getContentResolver().insert(movie?MediaStore.Video.Media.EXTERNAL_CONTENT_URI:MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values);if(destination==null)throw new IOException();try(InputStream input=new FileInputStream(file);OutputStream output=activity.getContentResolver().openOutputStream(destination)){if(output==null)throw new IOException();byte[] buffer=new byte[32768];int count;while((count=input.read(buffer))!=-1){if(destroyed||Thread.currentThread().isInterrupted())throw new InterruptedException();output.write(buffer,0,count);}}values.clear();values.put(MediaStore.MediaColumns.IS_PENDING,0);activity.getContentResolver().update(destination,values,null,null);prefs.edit().putString("auto_saved_"+saveKey,destination.toString()).apply();main.post(()->{saving=false;if(!destroyed){status="앨범의 누비길 폴더에 저장했어요";if(active)render();}});}catch(Exception error){if(destination!=null)try{activity.getContentResolver().delete(destination,null,null);}catch(RuntimeException ignored){}main.post(()->{saving=false;if(!destroyed){status="앨범에 저장하지 못했어요. 추억은 앱에 남아 있어요.";if(active)render();}});}});
     }
-    private boolean allowed(){if(active&&!destroyed&&host.canInteract())return true;stopPlayback();toast("정차 후 리캡을 만들고 재생해 주세요.");return false;}
-    private boolean current(int token,AtomicBoolean cancel){if(destroyed||!active||token!=generation||cancel.get())return false;if(!host.canInteract()){cancelWork("정차 후 다시 시작해 주세요.");return false;}return true;}
-    private void cancelWork(String message){generation++;if(cancellation!=null)cancellation.set(true);if(job!=null)job.cancel(true);job=null;busy=false;saving=false;status=message;updateControls();}
-    private void stopPlayback(){VideoView old=video;video=null;if(old!=null){try{old.stopPlayback();}catch(RuntimeException ignored){}}if(old!=null&&dialog!=null){AlertDialog oldDialog=dialog;dialog=null;oldDialog.dismiss();}}
-    private void invalidateExport(){if(exportedFile!=null||savedUri!=null){exportedFile=null;savedUri=null;status="내용이 바뀌었어요. 새 리캡을 만들어 주세요.";}}
-    private File recapDir(){File directory=new File(activity.getFilesDir(),"recaps");if(!directory.isDirectory()&&!directory.mkdirs())throw new IllegalStateException("Cannot create recap directory");return directory;}
-    private String exportKey(){return personalMode?month+"_personal":month;}
-    private void restoreExport(){
-        if(frames().isEmpty()){exportedFile=null;savedUri=null;return;}
-        String filename=prefs.getString("file_"+exportKey(),"");
-        if(!signature().equals(prefs.getString("signature_"+exportKey(),""))||!filename.matches("SCENIC_(?:SAMPLE|PERSONAL)_[A-Za-z0-9_.-]+\\.mp4")){exportedFile=null;savedUri=null;return;}
-        File file=new File(recapDir(),filename);if(!file.isFile()||file.length()==0){exportedFile=null;savedUri=null;return;}exportedFile=file;String uri=prefs.getString("saved_"+exportKey(),"");savedUri=uri.isEmpty()?null:Uri.parse(uri);
-    }
-    private String signature(){
-        StringBuilder data=new StringBuilder(month).append('|').append(mood).append('|').append(normalizedCaption(caption)).append('|').append(sampleMode);if(personalMode)data.append("|personal");
-        if(personalMode){for(PersonalVideoStore.Record r:personalVideos.selected(month))data.append('|').append(r.id).append('|').append(r.startMs).append('|').append(r.endMs);}else{List<ScenicCaptureStore.Record> records=monthlyRecords();for(int i=0;i<Math.min(MAX_FRAMES,records.size());i++){ScenicCaptureStore.Record r=records.get(i);data.append('|').append(r.id).append('|').append(r.imageKey).append('|').append(r.segmentName);}}
-        try{byte[] bytes=MessageDigest.getInstance("SHA-256").digest(data.toString().getBytes(StandardCharsets.UTF_8));StringBuilder value=new StringBuilder();for(byte b:bytes)value.append(String.format(Locale.US,"%02x",b&255));return value.toString();}catch(Exception impossible){throw new IllegalStateException(impossible);}
-    }
-    private void deletePublished(Uri uri){try{activity.getContentResolver().delete(uri,null,null);}catch(RuntimeException ignored){}}
-    private String displayCaption(){String normalized=normalizedCaption(caption);return normalized.isEmpty()?"기억하고 싶은 풍경":normalized;}
-    // Match saved-video signatures to the caption restored from preferences, including multiline edits.
-    private static String normalizedCaption(String value){return clean(value,60).trim();}
-    private static String monthKey(long time){return new SimpleDateFormat("yyyy-MM",Locale.US).format(new Date(time));}
-    private static String monthLabel(String value){String[] parts=value.split("-");return parts[0]+"년 "+Integer.parseInt(parts[1])+"월";}
-    private static String clean(String value,int length){String cleaned=value==null?"":value.replaceAll("[\\p{Cntrl}]"," ").trim();return cleaned.length()>length?cleaned.substring(0,length):cleaned;}
+    private void addStatus(){if(status==null||status.isEmpty())return;gap(panel,12);TextView view=text(status,16,MUTED,false);view.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);panel.addView(view,size(-1,-2));}
+    private RecapStoryPlanner.Story sampleStory(){Calendar date=Calendar.getInstance();date.add(Calendar.YEAR,-1);ArrayList<ScenicCaptureStore.Record> sample=new ArrayList<>();int i=0;for(String key:new String[]{"haeundae","gwangalli","coast"})sample.add(new ScenicCaptureStore.Record("recap-preview-"+key,"recap-preview","부산 바다 여행","부산",key.equals("haeundae")?"해운대":key.equals("gwangalli")?"광안리":"청사포",key,date.getTimeInMillis()+i++*60000,false));return RecapStoryPlanner.plan(Collections.emptyList(),sample,System.currentTimeMillis()).get(0);}
+    private static String placeFromMetadata(String location){if(location==null)return "";java.util.regex.Matcher match=java.util.regex.Pattern.compile("^([+-][0-9]+(?:\\.[0-9]+)?)([+-][0-9]+(?:\\.[0-9]+)?)").matcher(location);if(!match.find())return "";try{double lat=Double.parseDouble(match.group(1)),lon=Double.parseDouble(match.group(2));if(Math.abs(lat)>90||Math.abs(lon)>180)return "";DriveRegion closest=null;double best=Double.MAX_VALUE;for(DriveRegion region:DriveRegion.ALL){double distance=Math.hypot((lat-region.lat)*111,(lon-region.lon)*111*Math.cos(Math.toRadians(lat)));if(distance<best){best=distance;closest=region;}}return best<35&&closest!=null?closest.name:String.format(Locale.KOREA,"%.3f°, %.3f°",lat,lon);}catch(NumberFormatException invalid){return "";}}
+    private Bitmap originalThumbnail(RecapStoryPlanner.Story story){for(RecapStoryPlanner.Moment m:story.moments)if(m.video!=null){Bitmap image=decode(new File(thumbnailDir(),m.video.id+".jpg").getAbsolutePath(),null);if(image!=null)return image;}return null;}
+    private Bitmap photoBitmap(MemoryPhoto photo){return decode(photo.path,photo.asset);}
+    private Bitmap decode(String path,String asset){String key=path==null?asset:path;if(bitmaps.containsKey(key))return bitmaps.get(key);Bitmap image=null;try{BitmapFactory.Options options=new BitmapFactory.Options();options.inPreferredConfig=Bitmap.Config.RGB_565;if(path!=null)image=BitmapFactory.decodeFile(path,options);else try(InputStream input=activity.getAssets().open(asset)){options.inSampleSize=2;image=BitmapFactory.decodeStream(input,null,options);}}catch(Exception ignored){}if(image!=null){if(bitmaps.size()>=18)bitmaps.remove(bitmaps.keySet().iterator().next());bitmaps.put(key,image);}return image;}
+    private File thumbnailDir(){return directory("recap-thumbnails");}
+    private File recapDir(){return directory("recaps");}
+    private File directory(String name){File dir=new File(activity.getFilesDir(),name);if(!dir.isDirectory()&&!dir.mkdirs())throw new IllegalStateException("Storage unavailable");return dir;}
+    private boolean allowed(){if(active&&!destroyed&&host.canInteract())return true;stopPlayback();toast("정차 후 추억을 열어주세요.");return false;}
+    private static String clean(String value,int max){String result=value==null?"":value.replaceAll("[\\p{Cntrl}]"," ").trim();return result.length()>max?result.substring(0,max):result;}
+    private static String hash(String value){try{return hex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}catch(Exception impossible){throw new IllegalStateException(impossible);}}
+    private static String hex(byte[] bytes){StringBuilder result=new StringBuilder();for(byte b:bytes)result.append(String.format(Locale.US,"%02x",b&255));return result.toString();}
     private static String imageKey(String key){return "gwangalli".equals(key)?key:"coast".equals(key)?key:"haeundae";}
-    private static String location(String key){return "gwangalli".equals(key)?"광안리와 광안대교":"coast".equals(key)?"청사포 해안":"해운대해수욕장";}
     private static String credit(String key){return "gwangalli".equals(key)?"Masterhatch · CC BY-SA 4.0":"coast".equals(key)?"Andrewssi2 · CC BY-SA 3.0":"부산광역시 · 공공누리 제1유형";}
-    private Bitmap bitmap(String key){if(bitmaps.containsKey(key))return bitmaps.get(key);try(InputStream input=activity.getAssets().open("scenic-demo/"+imageKey(key)+".jpg")){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=2;options.inPreferredConfig=Bitmap.Config.RGB_565;Bitmap bitmap=BitmapFactory.decodeStream(input,null,options);bitmaps.put(key,bitmap);return bitmap;}catch(Exception unavailable){return null;}}
     private int dp(float value){return Math.round(value*activity.getResources().getDisplayMetrics().density);}
     private LinearLayout column(){LinearLayout view=new LinearLayout(activity);view.setOrientation(LinearLayout.VERTICAL);return view;}
-    private LinearLayout row(){LinearLayout view=new LinearLayout(activity);view.setOrientation(LinearLayout.HORIZONTAL);return view;}
+    private LinearLayout row(){LinearLayout view=new LinearLayout(activity);view.setOrientation(LinearLayout.HORIZONTAL);view.setGravity(Gravity.TOP);return view;}
     private LinearLayout.LayoutParams size(int width,int height){return new LinearLayout.LayoutParams(width<0?width:dp(width),height<0?height:dp(height));}
     private void gap(LinearLayout parent,int height){parent.addView(new View(activity),size(1,height));}
+    private void addAction(LinearLayout parent,TextView button){LinearLayout.LayoutParams p=wide?new LinearLayout.LayoutParams(0,-2,1):size(-1,-2);if(parent.getChildCount()>0)p.setMargins(wide?dp(8):0,wide?0:dp(8),0,0);parent.addView(button,p);}
     private GradientDrawable background(int color,int stroke,int radius){GradientDrawable shape=new GradientDrawable();shape.setColor(color);shape.setCornerRadius(dp(radius));if(stroke!=0)shape.setStroke(dp(1),stroke);return shape;}
-    private TextView text(String value,int sp,int color,boolean bold){TextView text=new TextView(activity);text.setText(value);text.setTextSize(sp);text.setTextColor(color);text.setTypeface(ScenicTypography.font(activity,bold?600:400));text.setIncludeFontPadding(false);text.setLineSpacing(dp(3),1);return text;}
-    private TextView button(String value,boolean primary,Runnable action){TextView button=text(value,15,primary?WHITE:INK,true);button.setGravity(Gravity.CENTER);button.setPadding(dp(12),dp(14),dp(12),dp(14));button.setMinHeight(dp(56));button.setMinWidth(dp(56));button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x182c6656),background(primary?GREEN:WHITE,primary?0:LINE,12),null));button.setFocusable(true);button.setClickable(true);button.setContentDescription(value);button.setAccessibilityDelegate(new View.AccessibilityDelegate(){@Override public void onInitializeAccessibilityNodeInfo(View view,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(view,info);info.setClassName(Button.class.getName());}});button.setOnClickListener(v->action.run());return button;}
-    private void toast(String value){Toast.makeText(activity,value,Toast.LENGTH_SHORT).show();}
+    private TextView text(String value,int sp,int color,boolean bold){TextView text=new TextView(activity);text.setText(value);text.setTextSize(ScenicTypography.size(sp));text.setTextColor(color);text.setTypeface(ScenicTypography.font(activity,bold?600:400));text.setIncludeFontPadding(false);text.setLineSpacing(dp(3),1);return text;}
+    private TextView button(String value,boolean primary,Runnable action){TextView button=text(value,17,primary?WHITE:INK,true);button.setGravity(Gravity.CENTER);button.setPadding(dp(16),dp(16),dp(16),dp(16));button.setMinHeight(dp(ScenicDesign.TOUCH_HEIGHT));button.setBackground(new RippleDrawable(ColorStateList.valueOf(primary?0x28ffffff:ScenicDesign.RIPPLE),background(primary?ACCENT:WHITE,primary?0:LINE,ScenicDesign.CONTROL_RADIUS),null));button.setFocusable(true);button.setClickable(true);button.setContentDescription(value);button.setAccessibilityDelegate(new View.AccessibilityDelegate(){public void onInitializeAccessibilityNodeInfo(View v,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(v,info);info.setClassName(Button.class.getName());}});button.setOnClickListener(v->action.run());controls.add(button);return button;}
+    private void toast(String message){Toast.makeText(activity,message,Toast.LENGTH_SHORT).show();}
 }
+
+
+

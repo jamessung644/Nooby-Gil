@@ -32,6 +32,51 @@ public final class ParkingReroutePolicy {
         }
         return new Decision(current,null,null);
     }
+    /** A suggestion shown to the driver; it never changes the destination by itself. */
+    public static final class Proposal {
+        public static final String FULL="FULL",LOW="LOW";
+        /** FULL, LOW, or null when the current lot is fine. */
+        public final String level;
+        public final ParkingAvailability current,alternativeAvailability;
+        public final DestinationPlace alternative;
+        private Proposal(String level,ParkingAvailability current,DestinationPlace alternative,ParkingAvailability availability){this.level=level;this.current=current;this.alternative=alternative;alternativeAvailability=availability;}
+        public String key(){return alternative==null||level==null?"":alternative.id+"|"+level;}
+    }
+    /** Immutable approval for one displayed destination and one subsequent recheck. */
+    public static final class Consent {
+        public final DestinationPlace alternative;
+        public Consent(Proposal proposal){
+            if(proposal==null||proposal.alternative==null)throw new IllegalArgumentException("No parking proposal to accept");
+            alternative=proposal.alternative;
+        }
+        public boolean requiresRecheck(Consent requested){return requested!=this;}
+        public boolean permits(Proposal result,Consent requested){return !requiresRecheck(requested)&&result!=null&&samePlace(alternative,result.alternative);}
+    }
+    /**
+     * Proposes a switch when the current lot is full or nearly full and a clearly roomier one is nearby.
+     * Fresh official snapshots count as evidence here because the driver still decides.
+     * preferredId restricts a consent recheck to the accepted lot; it must never substitute another lot.
+     */
+    public static Proposal propose(JSONObject response,DestinationPlace target,Set<String> excluded,long now,String preferredId)throws JSONException {
+        if(target==null||!"Kakao Local".equals(response.getString("source"))||!"parking".equals(response.getString("kind")))throw new JSONException("Invalid parking lookup");
+        JSONArray rows=response.getJSONArray("places");if(rows.length()>10)throw new JSONException("Too many parking places");
+        JSONObject focus=response.optJSONObject("focus");
+        if(focus==null)for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);if(target.id.equals(row.optString("id")))focus=row;}
+        ParkingAvailability current=ParkingAvailability.unknown(now);
+        if(focus!=null){DestinationPlace found=place(focus);if(!samePlace(target,found))throw new JSONException("Parking focus changed");current=ParkingAvailability.read(focus,now);}
+        String level=current.isFull(now)?Proposal.FULL:current.isLow(now)?Proposal.LOW:null;
+        if(level==null)return new Proposal(null,current,null,null);
+        DestinationPlace best=null;ParkingAvailability bestAvailability=null;
+        for(int i=0;i<rows.length();i++){
+            JSONObject row=rows.getJSONObject(i);DestinationPlace candidate=place(row);ParkingAvailability availability=ParkingAvailability.read(row,now);
+            if(candidate.id.equals(target.id)||excluded.contains(candidate.id)||!availability.isAvailable(now)||availability.isLow(now))continue;
+            if(preferredId!=null&&!candidate.id.equals(preferredId))continue;
+            if(Proposal.LOW.equals(level)&&availability.availableSpaces<=current.availableSpaces)continue;
+            if(candidate.id.equals(preferredId)){best=candidate;bestAvailability=availability;break;}
+            if(best==null){best=candidate;bestAvailability=availability;}
+        }
+        return new Proposal(level,current,best,bestAvailability);
+    }
     private static DestinationPlace place(JSONObject row)throws JSONException {
         DestinationPlace place=DestinationPlace.read(row,"Kakao Local");
         if(!place.id.matches("[0-9]{1,100}"))throw new JSONException("Invalid parking ID");

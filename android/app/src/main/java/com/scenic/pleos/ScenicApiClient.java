@@ -27,9 +27,12 @@ public final class ScenicApiClient {
     private volatile boolean cancelled;
     private HttpURLConnection activeConnection;
 
-    /** Contains only a safe user-facing message, never an upstream body or exception cause. */
+    /** Contains a safe message and HTTP status, never an upstream body or exception cause. */
     public static final class ApiException extends IOException {
-        ApiException(String message) { super(message); }
+        /** Zero for local validation, transport and response-format failures. */
+        public final int statusCode;
+        ApiException(String message) { this(message, 0); }
+        ApiException(String message, int statusCode) { super(message); this.statusCode = statusCode; }
     }
 
     public ScenicApiClient(String baseUrl) {
@@ -79,8 +82,12 @@ public final class ScenicApiClient {
         return destinationRoutes(originLat,originLon,destination,extraMinutes,theme,scenicSelection,false);
     }
     public JSONObject photoDestinationRoutes(double originLat,double originLon,DestinationPlace region,String theme,String selection)throws ApiException {
+        return photoDestinationRoutes(originLat,originLon,region,theme,selection,0);
+    }
+    /** With extra minutes the server also offers a course road and a scenic road to the same photo place. */
+    public JSONObject photoDestinationRoutes(double originLat,double originLon,DestinationPlace region,String theme,String selection,int extraMinutes)throws ApiException {
         if(selection==null)throw new ApiException("방문할 풍경 사진을 먼저 선택해 주세요.");
-        return destinationRoutes(originLat,originLon,region,0,theme,selection,true);
+        return destinationRoutes(originLat,originLon,region,extraMinutes,theme,selection,true);
     }
     private JSONObject destinationRoutes(double originLat,double originLon,DestinationPlace destination,
                                        int extraMinutes,String theme,String scenicSelection,boolean photoDestination)throws ApiException {
@@ -286,16 +293,16 @@ public final class ScenicApiClient {
     }
 
     private static ApiException httpError(int status) {
-        if (status >= 300 && status < 400) return new ApiException("서버가 다른 주소로 이동했습니다. 연결 주소를 직접 확인해 주세요.");
-        if (status == 429) return new ApiException("요청이 많습니다. 잠시 후 다시 시도해 주세요.");
-        if (status == 503) return new ApiException("서비스를 사용할 준비가 되지 않았습니다. 서버의 API 키 설정을 확인해 주세요.");
-        if (status == 504) return new ApiException("서비스 응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.");
-        if (status == 401 || status == 403) return new ApiException("서버 연결 권한을 확인해 주세요.");
-        if (status == 404) return new ApiException("서버에서 앱 API를 찾지 못했습니다. 서버 버전과 주소를 확인해 주세요.");
-        if (status == 409) return new ApiException("사진 선택이 만료되었거나 목적지가 바뀌었어요. 목적지 주변 사진을 새로 불러와 다시 선택해 주세요.");
-        if (status == 422) return new ApiException("선택한 장소까지의 자동차 경로를 확인하지 못했어요. 출발지 또는 다른 풍경·장소를 선택해 주세요.");
-        if (status == 400) return new ApiException("선택한 조건으로 요청을 처리할 수 없습니다. 시간이나 코스를 바꿔 주세요.");
-        return new ApiException("서비스 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.");
+        if (status >= 300 && status < 400) return new ApiException("서버가 다른 주소로 이동했습니다. 연결 주소를 직접 확인해 주세요.", status);
+        if (status == 429) return new ApiException("요청이 많습니다. 잠시 후 다시 시도해 주세요.", status);
+        if (status == 503) return new ApiException("서비스를 사용할 준비가 되지 않았습니다. 서버의 API 키 설정을 확인해 주세요.", status);
+        if (status == 504) return new ApiException("서비스 응답이 지연되고 있습니다. 잠시 후 다시 시도해 주세요.", status);
+        if (status == 401 || status == 403) return new ApiException("서버 연결 권한을 확인해 주세요.", status);
+        if (status == 404) return new ApiException("서버에서 앱 API를 찾지 못했습니다. 서버 버전과 주소를 확인해 주세요.", status);
+        if (status == 409) return new ApiException("사진 선택이 만료되었거나 목적지가 바뀌었어요. 목적지 주변 사진을 새로 불러와 다시 선택해 주세요.", status);
+        if (status == 422) return new ApiException("선택한 장소까지의 자동차 경로를 확인하지 못했어요. 출발지 또는 다른 풍경·장소를 선택해 주세요.", status);
+        if (status == 400) return new ApiException("선택한 조건으로 요청을 처리할 수 없습니다. 시간이나 코스를 바꿔 주세요.", status);
+        return new ApiException("서비스 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.", status);
     }
 
     private static ApiException malformed() {

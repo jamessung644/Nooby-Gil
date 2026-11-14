@@ -500,12 +500,16 @@ public final class RecapVideoExporter {
         }
     }
 
-    public static double durationSeconds(List<Frame> frames){double content=0;boolean personal=false;for(Frame frame:frames)personal|=frame.personal();if(!personal)return SECONDS;for(Frame frame:frames)content+=frame.personal()?(frame.endMs-frame.startMs)/1000.0:3;return content+3;}
+    public static double durationSeconds(List<Frame> frames){
+        boolean personal=false,samples=false;double content=0;
+        for(Frame frame:frames){personal|=frame.personal();samples|=!frame.personal();content+=frame.personal()?(frame.endMs-frame.startMs)/1000.0:3;}
+        return personal?content+(samples?3:0):SECONDS;
+    }
     private static void render(Canvas canvas, List<Frame> frames, List<Bitmap> images,List<MediaMetadataRetriever> clips,
             String caption, double seconds) throws IOException {
-        boolean personal=false;for(Frame f:frames)personal|=f.personal();
-        double content=durationSeconds(frames)-3;
-        if (seconds >= content) { renderCredits(canvas, frames); return; }
+        boolean personal=false,samples=false;for(Frame f:frames){personal|=f.personal();samples|=!f.personal();}
+        double content=durationSeconds(frames)-(samples?3:0);
+        if (samples&&seconds >= content) { renderCredits(canvas, frames); return; }
         canvas.drawColor(Color.BLACK);
         int index=0;double age=seconds,span=personal?(frames.get(0).personal()?(frames.get(0).endMs-frames.get(0).startMs)/1000.0:3):PHOTO_SECONDS/(double)frames.size();
         while(index<frames.size()-1&&age>=span){age-=span;index++;Frame next=frames.get(index);span=personal?(next.personal()?(next.endMs-next.startMs)/1000.0:3):PHOTO_SECONDS/(double)frames.size();}
@@ -517,42 +521,12 @@ public final class RecapVideoExporter {
             try{drawPhoto(canvas,decoded,1f,255);}finally{decoded.recycle();}
         }else{int alpha=age<0.35?(int)(255*age/0.35):255;drawPhoto(canvas,images.get(index),(float)(1+0.07*fraction),alpha);}
         Paint shade = new Paint();
-        shade.setShader(new LinearGradient(0, 310, 0, HEIGHT, 0x00000000, 0xe8000000, Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 270, WIDTH, HEIGHT, shade);
-        shade.setShader(new LinearGradient(0, 0, 0, 130, 0x90000000, 0x00000000, Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, WIDTH, 140, shade);
-        Paint white = textPaint(12, Color.WHITE, true);
-        canvas.drawText("SCENIC  /  MONTHLY RECAP", 24, 37, white);
-        Paint pill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        pill.setColor(0xccffffff);
-        canvas.drawRoundRect(new RectF(24, 51, 185, 75), 12, 12, pill);
-        canvas.drawText(selected.personal()?"내가 가져온 영상":"샘플 사진 · 실제 촬영 아님", 35, 67, textPaint(10, 0xff262a2c, false));
-        String[] captionParts = caption.split("\\n", 2);
-        String memory = captionParts.length == 2 ? captionParts[1] : caption;
-        if (captionParts.length == 2) {
-            drawLines(canvas, captionParts[0], 24, 99, 312, textPaint(13, Color.WHITE, true), 18, 2);
-        }
-        Frame frame = frames.get(index);
-        float cursor = drawLines(canvas, frame.title.isEmpty() ? "기억하고 싶은 풍경" : frame.title,
-                24, 436, 312, textPaint(26, Color.WHITE, true), 32, 2);
-        cursor += 16;
-        drawLines(canvas, memory.isEmpty() ? "좋은 장면을 오래 기억하는 방법." : memory,
-                24, cursor, 312, textPaint(15, 0xfff1f3f4, false), 22, 3);
-        Paint bar = new Paint(Paint.ANTI_ALIAS_FLAG);
-        float gap = 5, width = (312 - (frames.size() - 1) * gap) / frames.size();
-        for (int i = 0; i < frames.size(); i++) {
-            float x = 24 + i * (width + gap);
-            bar.setColor(0x55ffffff);
-            canvas.drawRoundRect(new RectF(x, 598, x + width, 601), 1.5f, 1.5f, bar);
-            if (i <= index) {
-                bar.setColor(Color.WHITE);
-                float fill = i < index ? width : (float) (width * fraction);
-                canvas.drawRoundRect(new RectF(x, 598, x + fill, 601), 1.5f, 1.5f, bar);
-            }
-        }
-        String creator = frame.personal()?"가져온 영상 · 원본 소리 대신 합성 음악": "사진 "+creditFor(frame.assetPath).creator+" · 원본 출처는 마지막 화면";
-        drawLines(canvas, creator, 24, 621, 312,
-                textPaint(8, 0xffe7e8e9, false), 10, 1);
+        shade.setShader(new LinearGradient(0, 430, 0, HEIGHT, 0x00000000, 0xd9000000, Shader.TileMode.CLAMP));
+        canvas.drawRect(0, 430, WIDTH, HEIGHT, shade);
+        String title=selected.title.isEmpty()?"기억하고 싶은 풍경":selected.title;
+        if(!selected.personal()&&!title.contains("샘플"))title+=" · 샘플";
+        Paint titlePaint=textPaint(26,Color.WHITE,true);titlePaint.setShadowLayer(2,0,1,0x80000000);
+        drawLines(canvas,title,24,552,312,titlePaint,32,2);
     }
 
     private static void drawPhoto(Canvas canvas, Bitmap bitmap, float zoom, int alpha) {
@@ -566,29 +540,19 @@ public final class RecapVideoExporter {
 
     private static void renderCredits(Canvas canvas, List<Frame> frames) {
         canvas.drawColor(0xfff4f1ea);
-        Paint heading = textPaint(26, 0xff202828, true);
-        canvas.drawText("장면을 남긴 사람들", 24, 47, heading);
-        boolean personal=false;for(Frame frame:frames)personal|=frame.personal();
-        canvas.drawText(personal?"PERSONAL CLIPS / MADE ON DEVICE":"SAMPLE PHOTOGRAPHS / PHOTO CREDITS", 24, 70, textPaint(9, 0xff59605f, true));
-        float y = drawLines(canvas, personal?"사용자가 선택한 영상 구간으로 만든 리캡입니다. 원본 소리 대신 SCENIC 합성 음악을 넣었습니다. 원본 파일은 변경하지 않았습니다.":"이 영상은 공개 샘플 사진을 편집한 체험 결과입니다. 사용자의 실제 주행·차량 촬영 기록이 아닙니다.",
-                24, 96, 312, textPaint(11, 0xff343c3b, false), 16, 3) + 19;
+        canvas.drawText("사진 출처",24,47,textPaint(24,0xff202828,true));
+        float y=84;
         Map<String, Credit> used = new LinkedHashMap<>();
         for (Frame frame : frames) if(!frame.personal())used.put(frame.assetPath, creditFor(frame.assetPath));
-        if(personal){for(Frame frame:frames)if(frame.personal()){y=drawLines(canvas,frame.title,24,y,312,textPaint(12,0xff202828,true),17,2)+12;if(y>460)break;}}
         for (Credit credit : used.values()) {
             y = drawLines(canvas, credit.title + " / " + credit.creator, 24, y, 312,
                     textPaint(10, 0xff202828, true), 13, 2);
             y += 4;
-            y = drawLines(canvas, credit.license, 24, y, 312, textPaint(9, 0xff46504e, false), 12, 2);
+            y = drawLines(canvas, credit.license+" · 화면비 편집", 24, y, 312, textPaint(9, 0xff202828, false), 12, 2);
             y = drawLines(canvas, credit.licenseUrl, 24, y + 2, 312, textPaint(8, 0xff46504e, false), 10, 2);
             y = drawLines(canvas, credit.source, 24, y + 2, 312, textPaint(8, 0xff46504e, false), 10, 3);
             y += 17;
         }
-        drawLines(canvas, personal?"가져온 영상은 세로 화면에 맞춰 잘라 표시하고 메모를 더했습니다. 이 영상과 원본을 외부 서버에 전송하지 않았습니다.":"사진에 화면비 크롭·이동·자막을 적용했습니다. 각 사진의 표시된 라이선스와 출처를 유지합니다.",
-                24, 536, 312, textPaint(9, 0xff46504e, false), 13, 3);
-        canvas.drawText("음악: SCENIC 오리지널 신시사이저 · 기기에서 생성", 24, 590, textPaint(9, 0xff46504e, false));
-        canvas.drawText("SCENIC", 24, 620, textPaint(15, 0xff202828, true));
-        canvas.drawText(Math.round(durationSeconds(frames))+" SEC / MADE ON DEVICE", 190, 620, textPaint(8, 0xff59605f, true));
     }
 
     private static Paint textPaint(float size, int color, boolean bold) {
