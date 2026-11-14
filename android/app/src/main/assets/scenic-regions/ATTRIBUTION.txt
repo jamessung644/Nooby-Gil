@@ -1,4 +1,4 @@
-SCENIC 지역 카드 사진
+누비길 지역 카드 사진
 
 region-gangneung.jpg — 경포호(철새도래지)
 제공: 한국관광공사 TourAPI
