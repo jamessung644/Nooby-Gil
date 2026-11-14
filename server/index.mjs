@@ -97,6 +97,6 @@ export function createServer({env=process.env,fetchImpl=fetch,scenery=loadScener
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const port=Number(process.env.PORT||4173);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('PORT must be 1–65535');
-  const server=createServer();server.on('error',e=>{console.error(`서버를 시작할 수 없습니다 (${e.code}). 포트 사용 여부 또는 실행 환경의 네트워크 권한을 확인해 주세요.`);process.exitCode=1;});server.listen(port,'127.0.0.1',()=>console.log(`SCENIC Local: http://127.0.0.1:${port}`));
+  const server=createServer();server.on('error',e=>{console.error(`서버를 시작할 수 없습니다 (${e.code}). 포트 사용 여부 또는 실행 환경의 네트워크 권한을 확인해 주세요.`);process.exitCode=1;});server.listen(port,'127.0.0.1',()=>console.log(`누비길 Local: http://127.0.0.1:${port}`));
   for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>server.close(()=>process.exit(0)));
 }
