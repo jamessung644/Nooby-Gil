@@ -29,7 +29,7 @@ for photo in manifest['photos']:
                  transformation='가로세로 비율 유지 축소·JPEG 압축. 카드에서는 중앙 맞춤 표시.')
     prepared.append(photo)
 (target / 'manifest.json').write_text(json.dumps({'version': 1, 'photos': prepared}, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-(target / 'ATTRIBUTION.txt').write_text('SCENIC 지역 카드 사진\n\n' + '\n\n'.join(
+(target / 'ATTRIBUTION.txt').write_text('누비길 지역 카드 사진\n\n' + '\n\n'.join(
     f"{p['file']} — {p['placeName']}\n제공: {p['sourceName']}\n{p['license']}\n촬영자: {p['photographer']}\n원본: {p['originalUrl']}\n출처: {p['sourceUrl']}\n이용조건: {p['licenseUrl']}\n확인: {p['fetchedAt']}\n{p['transformation']}"
     for p in prepared) + '\n', encoding='utf-8')
 print(f'Prepared {len(prepared)} attributed regional photos ({sum((target / p["file"]).stat().st_size for p in prepared):,} bytes).')

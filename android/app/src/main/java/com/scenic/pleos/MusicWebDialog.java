@@ -322,7 +322,7 @@ public final class MusicWebDialog {
         title.setText("YouTube Music");
         title.setTextSize(minimized ? 14 : 20);
         sizeButton.setText(minimized ? "크게 보기" : "작게 보기");
-        sizeButton.setContentDescription(minimized ? "음악 창 크게 보기" : "음악을 재생하며 SCENIC 둘러보기");
+        sizeButton.setContentDescription(minimized ? "음악 창 크게 보기" : "음악을 재생하며 누비길 둘러보기");
         closeButton.setText(minimized ? "종료" : "재생 종료");
         closeButton.setContentDescription("음악 재생 종료");
         selectedButton.setText(minimized ? "목록" : "선택한 목록");

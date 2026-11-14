@@ -3,6 +3,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.car.permission.CAR_SPEED" />
@@ -18,7 +19,7 @@
         <!-- Needed only for the installed app's launcher fallback on Android 11+. -->
         <package android:name="com.google.android.apps.youtube.music" />
     </queries>
-    <application android:label="SCENIC · 현대자동차 공모전" android:icon="@drawable/ic_scenic" android:theme="@style/AppTheme" android:allowBackup="false" android:networkSecurityConfig="@xml/network_security_config" android:supportsRtl="true">
+    <application android:label="누비길" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/AppTheme" android:allowBackup="false" android:networkSecurityConfig="@xml/network_security_config" android:supportsRtl="true">
         <uses-library android:name="android.car" android:required="false" />
         <service android:name=".ParkingWatchService" android:exported="false" android:foregroundServiceType="dataSync" />
         <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="landscape" android:configChanges="orientation|screenSize" android:resizeableActivity="true">

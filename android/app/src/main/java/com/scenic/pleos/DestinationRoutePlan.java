@@ -118,7 +118,16 @@ public final class DestinationRoutePlan {
     /** A region is the photo search area, while the selected photo place is the actual destination. */
     public static DestinationRoutePlan parsePhotoDestination(JSONObject response,DestinationPlace region,DestinationPlace photo,
                                             double originLat,double originLon,String theme)throws JSONException {
-        if(response==null||region==null||photo==null||!CourseEngine.inKorea(originLat,originLon)||!validTheme(theme))throw invalid();
+        return parsePhotoDestination(response,region,photo,originLat,originLon,theme,0);
+    }
+    /**
+     * With extra minutes the server may add a recommended-course road and a scenic road to the same photo place.
+     * Every road, the extra ones included, still has to end within 150 m of that place.
+     */
+    public static DestinationRoutePlan parsePhotoDestination(JSONObject response,DestinationPlace region,DestinationPlace photo,
+                                            double originLat,double originLon,String theme,int extraMinutes)throws JSONException {
+        if(response==null||region==null||photo==null||!CourseEngine.inKorea(originLat,originLon)||!validTheme(theme)||extraMinutes<0||extraMinutes>120)throw invalid();
+        if(extraMinutes>0)return parsePhotoDestinationWithExtras(response,region,photo,originLat,originLon,theme,extraMinutes);
         if(!"photo-destination".equals(response.getString("mode"))||!"ok".equals(response.getString("scenicStatus")))throw invalid();
         DestinationPlace requested=DestinationPlace.read(response.getJSONObject("requestedDestination"),region.source);
         DestinationPlace actual=DestinationPlace.read(response.getJSONObject("destination"),photo.source);
@@ -131,6 +140,30 @@ public final class DestinationRoutePlan {
         if(CourseEngine.distanceMeters(photo.lat,photo.lon,arrival[0],arrival[1])>150.000001)throw invalid();
         List<Route> routes=new ArrayList<>();routes.add(route);
         return new DestinationRoutePlan(photo,originLat,originLon,0,theme,"ok",text(response,"message",500),routes);
+    }
+    private static DestinationRoutePlan parsePhotoDestinationWithExtras(JSONObject response,DestinationPlace region,DestinationPlace photo,
+                                            double originLat,double originLon,String theme,int extraMinutes)throws JSONException {
+        if(!"photo-destination".equals(response.getString("mode")))throw invalid();
+        DestinationPlace requested=DestinationPlace.read(response.getJSONObject("requestedDestination"),region.source);
+        DestinationPlace actual=DestinationPlace.read(response.getJSONObject("destination"),photo.source);
+        if(!samePlace(requested,region)||!samePlace(actual,photo))throw invalid();
+        JSONObject origin=response.getJSONObject("origin");
+        if(!same(number(origin,"lat",33,38.65),originLat)||!same(number(origin,"lon",124.5,131.95),originLon))throw invalid();
+        String status=text(response,"scenicStatus",32),message=text(response,"message",500);
+        if(!"ok".equals(status)&&!"no_candidates".equals(status)&&!"no_feasible_route".equals(status)&&!"provider_unavailable".equals(status))throw invalid();
+        JSONArray raw=response.getJSONArray("routes");
+        if(raw.length()<1||raw.length()>3||("ok".equals(status)!=(raw.length()>=2)))throw invalid();
+        List<Route> routes=new ArrayList<>();
+        for(int i=0;i<raw.length();i++){
+            String id=i==0?"fast":raw.getJSONObject(i).optString("id");
+            if(i>0&&!("curated".equals(id)?i==1:"scenic".equals(id)&&(i==1||"curated".equals(routes.get(1).id))))throw invalid();
+            Route route=parseRoute(raw.getJSONObject(i),id,photo,originLat,originLon,theme,null);
+            double[] arrival=route.coordinates[route.coordinates.length-1];
+            if(CourseEngine.distanceMeters(photo.lat,photo.lon,arrival[0],arrival[1])>150.000001)throw invalid();
+            routes.add(route);
+        }
+        for(int i=1;i<routes.size();i++)if(routes.get(i).durationMin*60>routes.get(0).durationMin*60+extraMinutes*60+0.000001)throw invalid();
+        return new DestinationRoutePlan(photo,originLat,originLon,extraMinutes,theme,status,message,routes);
     }
     private static boolean samePlace(DestinationPlace a,DestinationPlace b){return a.id.equals(b.id)&&a.name.equals(b.name)&&same(a.lat,b.lat)&&same(a.lon,b.lon);}
     private static Route parseRoute(JSONObject object,String expectedId,DestinationPlace destination,
@@ -172,6 +205,7 @@ public final class DestinationRoutePlan {
             if(distanceToRoute(lat,lon,coordinates,originLat)>(expectedScenicPlace==null?700.000001:150.000001))throw invalid();
             waypoints.add(new CourseEngine.Spot(name,"풍경 길 통과 지점 · 별도 체류 시간 없음 · "+waypointSource,lat,lon));
         }
+        if(!reachesInOrder(waypoints,coordinates,originLat,expectedScenicPlace==null?700.000001:150.000001))throw invalid();
         // The fast road has no scenery checkpoints; a malformed list rejects the whole response.
         List<RouteCheckpoint> checkpoints=RouteCheckpoint.parseAll(object);
         if("fast".equals(id)&&!checkpoints.isEmpty())throw invalid();
@@ -194,6 +228,26 @@ public final class DestinationRoutePlan {
             min=Math.min(min,Math.hypot(ax+t*dx,ay+t*dy));
         }
         return min;
+    }
+    /** A later stop may be passed early, provided the road reaches it again in the requested order. */
+    private static boolean reachesInOrder(List<CourseEngine.Spot> stops,double[][] coordinates,double referenceLat,double radius){
+        double latitudeScale=6371000*Math.PI/180,longitudeScale=latitudeScale*Math.cos(Math.toRadians(referenceLat)),progress=0;
+        int segment=1;
+        for(CourseEngine.Spot stop:stops){
+            boolean reached=false;
+            for(;segment<coordinates.length;segment++,progress=0){
+                double ax=(coordinates[segment-1][1]-stop.lon)*longitudeScale,ay=(coordinates[segment-1][0]-stop.lat)*latitudeScale;
+                double dx=(coordinates[segment][1]-coordinates[segment-1][1])*longitudeScale,dy=(coordinates[segment][0]-coordinates[segment-1][0])*latitudeScale,length=dx*dx+dy*dy;
+                if(length==0){if(ax*ax+ay*ay<=radius*radius){reached=true;break;}continue;}
+                double center=-(ax*dx+ay*dy)/length,closestX=ax+center*dx,closestY=ay+center*dy;
+                double margin=radius*radius-closestX*closestX-closestY*closestY;
+                if(margin<0)continue;
+                double reach=Math.sqrt(margin/length),entry=Math.max(progress,center-reach);
+                if(entry<=1&&entry<=center+reach){progress=entry;reached=true;break;}
+            }
+            if(!reached)return false;
+        }
+        return true;
     }
     private static boolean same(double a,double b){return Math.abs(a-b)<=0.0000001;}
     private static String text(JSONObject object,String key,int max)throws JSONException{return DestinationPlace.text(object,key,max,false);}

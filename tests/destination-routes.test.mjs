@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { createServer } from '../server/index.mjs';
 import { planDestinationRoutes, selectScenicCandidates } from '../server/destination-routes.mjs';
+import { createScenicSelectionSigner } from '../server/scenic-photos.mjs';
 
 const env = { KAKAO_REST_API_KEY: 'private-test-key' };
 const origin = { lat: 35.1152, lon: 129.0422 };
@@ -36,6 +37,73 @@ function routeFetch({ scenicSeconds = 1800, scenicCode = 0, failScenic = false, 
     return road(scenicCoordinates ?? [baseline[0], [35.14, 129.085], [lat, lon], baseline.at(-1)], scenicSeconds, 18000, scenicCode);
   } };
 }
+
+test('Gyeongpo Lake photo rejects a road ending 344m away even when Kakao summary repeats the requested coordinate', async () => {
+  const start = { lat: 35.1151, lon: 129.0414 };
+  const region = { id: 'region-gangneung', name: '강릉', lat: 37.7519, lon: 128.8761 };
+  const photo = { id: 'tour-127975', name: '경포호(철새도래지)', lat: 37.7967, lon: 128.9021 };
+  const selectionSigner = createScenicSelectionSigner();
+  let calls = 0;
+  // Sanitized metadata from a successful Kakao response on 2026-11-09.
+  // summary.destination is the requested POI, not the final drivable vertex.
+  const data = await road([[start.lat, start.lon], [37.79914818296551, 128.89970305024505]], 17416, 378255).json();
+  data.routes[0].summary.destination = { name: '', x: 128.9020918800868, y: 37.796697175463294 };
+  await assert.rejects(planDestinationRoutes({ origin: start, destination: region, mode: 'photo-destination',
+    scenicSelection: selectionSigner.issue(region, photo), extraMinutes: 30 }, {
+    env, selectionSigner, catalog: { places: [] }, courses: [],
+    fetchImpl: async () => { calls++; return Response.json(data); },
+  }), error => error.status === 422 && /150m/.test(error.message));
+  assert.equal(calls, 1, 'An unreachable photo must not trigger scenic calls or a replacement destination');
+});
+
+test('photo course roads require reaching their waypoints in order, allowing an earlier pass of a later stop', async () => {
+  const start = { lat: 35.1, lon: 129 };
+  const photo = { id: 'photo-coast', name: '선택한 해안', lat: 35.1, lon: 129.3 };
+  const first = { name: '첫 해안', lat: 35.12, lon: 129.1 };
+  const second = { name: '둘째 해안', lat: 35.08, lon: 129.2 };
+  const selectionSigner = createScenicSelectionSigner();
+  const scenicSelection = selectionSigner.issue(destination, photo);
+  const coordinates = place => [place.lat, place.lon];
+  for (const [stops, expectedIds] of [
+    [[second, first], ['fast']],
+    [[first, second], ['fast', 'curated']],
+    [[second, first, second], ['fast', 'curated']],
+  ]) {
+    const result = await planDestinationRoutes({ origin: start, destination, mode: 'photo-destination', scenicSelection, extraMinutes: 30, theme: 'coast' }, {
+      env, selectionSigner, catalog: { places: [] },
+      courses: [{ id: 'coast-course', title: '해안 드라이브', terrain: 'coast', stops: [first, second, photo] }],
+      fetchImpl: async url => {
+        const query = new URL(url).searchParams;
+        assert.equal(query.get('destination'), '129.3,35.1');
+        return query.has('waypoints')
+          ? road([start, ...stops, photo].map(coordinates), 1800, 50000)
+          : road([start, photo].map(coordinates), 1200, 30000);
+      },
+    });
+    assert.deepEqual(result.routes.map(route => route.id), expectedIds);
+    for (const route of result.routes) assert.deepEqual(route.coordinates.at(-1), [35.1, 129.3]);
+  }
+});
+
+test('photo scenic pairs can pass the second stop early and return to it after the first', async () => {
+  const start = { lat: 35.1, lon: 129 };
+  const photo = { id: 'photo-coast', name: '선택한 해안', lat: 35.1, lon: 129.3 };
+  const selectionSigner = createScenicSelectionSigner();
+  const result = await planDestinationRoutes({ origin: start, destination, mode: 'photo-destination', scenicSelection: selectionSigner.issue(destination, photo), extraMinutes: 30, theme: 'coast' }, {
+    env, selectionSigner,
+    catalog: { places: [{ id: 'first', title: '첫 해안', lat: 35.12, lon: 129.1 }, { id: 'second', title: '둘째 해안', lat: 35.08, lon: 129.2 }] },
+    fetchImpl: async url => {
+      const query = new URL(url).searchParams;
+      assert.equal(query.get('destination'), '129.3,35.1');
+      const stops = (query.get('waypoints') || '').split('|').filter(Boolean).map(pair => pair.split(',').map(Number).reverse());
+      if (stops.length === 2) stops.unshift(stops[1]);
+      return road([[35.1, 129], ...stops, [35.1, 129.3]], stops.length ? 1800 : 1200, stops.length > 1 ? 50000 : 30000);
+    },
+  });
+  assert.deepEqual(result.routes.map(route => route.id), ['fast', 'scenic']);
+  assert.deepEqual(result.routes[1].waypoints.map(stop => stop.id), ['first', 'second']);
+  assert.deepEqual(result.routes[1].coordinates.at(-1), [35.1, 129.3]);
+});
 
 test('destination search normalizes Kakao Local results and omits invalid, duplicate and private fields', async () => {
   let called;
@@ -198,11 +266,39 @@ test('candidate filter excludes backtracking, beyond destination, hiking, existi
   assert.deepEqual(result.map(place => place.id), ['good']);
 });
 
+test('amusement, commercial and bare garden places are never offered as a scenic stop', async () => {
+  const { selectScenicCandidates } = await import('../server/destination-routes.mjs');
+  const trip = { origin: { lat: 35.1, lon: 129 }, destination: { lat: 35.1, lon: 129.2 }, theme: 'all', fast: { distanceKm: 20, coordinates: [[35.1, 129], [35.1, 129.1], [35.1, 129.2]] } };
+  const at = (id, title) => ({ id, title, lat: 35.11, lon: 129.1 });
+  for (const title of ['마이돈촌테마공원', '과일나라 테마파크', '푸른숲 유원지', '숲속 리조트', '바다 카페', '마이정원', '쌍류포도정원협동조합']) {
+    assert.deepEqual(selectScenicCandidates(trip, { places: [at('x', title)] }).map(place => place.id), [], title);
+  }
+  for (const title of ['푸른 해안도로', '순천만국가정원', '호반 전망대', '메타세쿼이아 가로수길']) {
+    assert.equal(selectScenicCandidates(trip, { places: [at('ok', title)] }).length, 1, title);
+  }
+});
+
+test('an offline OSM grid must also find the title scene beside the place', async () => {
+  const { selectScenicCandidates } = await import('../server/destination-routes.mjs');
+  const grid = { LON0: 129, LAT0: 35, dLon: 0.003, dLat: 0.00225, W: 200, H: 120, cells: new Uint8Array(200 * 120) };
+  const trip = { origin: { lat: 35.1, lon: 129 }, destination: { lat: 35.1, lon: 129.2 }, theme: 'all', fast: { distanceKm: 20, coordinates: [[35.1, 129], [35.1, 129.1], [35.1, 129.2]] } };
+  const place = { id: 'sea', title: '푸른 바다', lat: 35.11, lon: 129.1 };
+  assert.equal(selectScenicCandidates(trip, { places: [place] }, null).length, 1, 'no grid: the title decides');
+  assert.equal(selectScenicCandidates(trip, { places: [place] }, grid).length, 0, 'a coast name with no coast around it is dropped');
+  const cx = Math.floor((place.lon - grid.LON0) / grid.dLon), cy = Math.floor((place.lat - grid.LAT0) / grid.dLat);
+  grid.cells[cy * grid.W + cx] = 1;
+  const [kept] = selectScenicCandidates(trip, { places: [place] }, grid);
+  assert.equal(kept.id, 'sea');
+  const plain = selectScenicCandidates(trip, { places: [place] }, null)[0];
+  assert.ok(kept.value > plain.value, 'a scene found in the grid scores higher than a title alone');
+  // Scenes the grid cannot judge keep the title hint.
+  assert.equal(selectScenicCandidates({ ...trip, theme: 'countryside' }, { places: [{ id: 'f', title: '청보리밭', lat: 35.11, lon: 129.1 }] }, grid).length, 1);
+});
 test('route corridor follows real bends instead of accepting everything near the origin-destination line', async () => {
   const { selectScenicCandidates } = await import('../server/destination-routes.mjs');
   const result = selectScenicCandidates({ origin: { lat: 35.1, lon: 129 }, destination: { lat: 35.1, lon: 129.2 }, theme: 'forest', fast: { distanceKm: 35, coordinates: [[35.1, 129], [35.17, 129.1], [35.1, 129.2]] } }, { places: [
     { id: 'wrong-corridor', title: '푸른숲', lat: 35.09, lon: 129.1 },
-    { id: 'right-corridor', title: '초록정원', lat: 35.16, lon: 129.1 },
+    { id: 'right-corridor', title: '초록숲길', lat: 35.16, lon: 129.1 },
   ] });
   assert.deepEqual(result.map(place => place.id), ['right-corridor']);
 });
@@ -291,8 +387,9 @@ for (const { theme, label, title } of scenicFixtures) {
   });
 }
 
-test('all admits each of the six scenic categories, and stops at the same place never become two waypoints', async () => {
-  for (const { title } of scenicFixtures) assert.equal(sceneCandidates('all', [title]).length, 1, title);
+test('all admits the natural and rural categories but not city views, and stops at the same place never become two waypoints', async () => {
+  for (const { title } of scenicFixtures) assert.equal(sceneCandidates('all', [title]).length, sceneCandidates('city', [title]).length ? 0 : 1, title);
+  assert.ok(scenicFixtures.some(({ title }) => sceneCandidates('city', [title]).length === 1));
   const candidates = sceneCandidates('all', scenicFixtures.map(fixture => fixture.title));
   assert.equal(candidates.length, 3);
   const result = await planDestinationRoutes({ ...sceneTrip, theme: 'all' }, {
@@ -461,7 +558,7 @@ test('nearby scenes are never paired into two stops', async () => {
 
 test('a place with several scenery tags outranks a single-tag place at the same position for all', () => {
   const [first] = selectScenicCandidates({ ...sceneTrip, theme: 'all', fast: { distanceKm: 20, coordinates: sceneBaseline } }, {
-    places: [scenePoint('해안 풍경', 'a-plain'), scenePoint('반포한강공원', 'z-rich')],
+    places: [scenePoint('해안 풍경', 'a-plain'), scenePoint('해안 숲길', 'z-rich')],
   });
   assert.equal(first.id, 'z-rich');
 });

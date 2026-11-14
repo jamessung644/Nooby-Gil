@@ -57,6 +57,12 @@ public final class ParkingAvailability {
     public String currentStatus(long now){return isFresh(now)?status:"unknown";}
     public boolean isAvailable(long now){return "available".equals(currentStatus(now));}
     public boolean isFull(long now){return "full".equals(currentStatus(now));}
+    /** Still available but about to fill: at most 5 free spaces, or at most 5% of a known total. */
+    public boolean isLow(long now){
+        if(!isAvailable(now)||availableSpaces==null)return false;
+        return availableSpaces<=LOW_SPACES||totalSpaces!=null&&totalSpaces>0&&availableSpaces*100L<=totalSpaces*(long)LOW_PERCENT;
+    }
+    public static final int LOW_SPACES=5,LOW_PERCENT=5;
     public int priority(long now){return isAvailable(now)?0:isFull(now)?2:1;}
     public String unavailableReason(long now){
         if("stale".equals(reason)||"live".equals(reason)&&!isFresh(now))return isSnapshot()?"조회한 현황이 오래되어 빈자리를 다시 확인해야 해요.":"제공 시각이 오래되어 빈자리를 확인할 수 없어요.";

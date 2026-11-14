@@ -35,7 +35,7 @@ function openDatabase() {
       }
     };
     request.onerror = () => fail(request.error || new Error('영상 보관함을 열 수 없습니다.'));
-    request.onblocked = () => fail(new Error('다른 SCENIC 탭을 닫은 후 다시 시도해 주세요.'));
+    request.onblocked = () => fail(new Error('다른 누비길 탭을 닫은 후 다시 시도해 주세요.'));
     request.onsuccess = () => {
       const db = request.result;
       // A blocked request may still succeed after its caller has already retried.

@@ -29,7 +29,7 @@ test('a blocked open closes its late connection and leaves the successful retry 
   const { storage, requests } = await storageHarness(t);
   const blocked = storage.listClips();
   requests[0].onblocked();
-  await assert.rejects(blocked, /다른 SCENIC 탭/);
+  await assert.rejects(blocked, /다른 누비길 탭/);
 
   const retry = storage.listClips();
   const current = database();
