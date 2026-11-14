@@ -1,5 +1,5 @@
-SCENIC offline sample photographs
-These are existing photographs of Busan used as demo assets. They were not captured by SCENIC, the user's vehicle, or another SCENIC driver. No actual camera capture or public sharing is implied.
+누비길 offline sample photographs
+These are existing photographs of Busan used as demo assets. They were not captured by 누비길, the user's vehicle, or another 누비길 driver. No actual camera capture or public sharing is implied.
 
 haeundae.jpg — Busan City Haeundae Beach.jpg
 Creator: Busan Metropolitan City (부산광역시)
