@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f5f5f5">
-  <meta name="description" content="SCENIC 보조 웹 데모 — 코스 탐색, 경로 시뮬레이션, 합성 사운드와 영상 기록.">
-  <title>SCENIC · 드라이브 코스</title>
+  <meta name="theme-color" content="#f3f5f7">
+  <meta name="description" content="누비길 보조 웹 데모 — 코스 탐색, 경로 시뮬레이션, 합성 사운드와 영상 기록.">
+  <title>누비길 · 드라이브 코스</title>
   <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
@@ -15,8 +15,10 @@
   <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
   <div class="app-shell">
     <aside class="sidebar" aria-label="주 메뉴">
-      <a class="brand" href="#explore" aria-label="SCENIC 홈"><svg viewBox="0 0 32 32" fill="none"><path d="M3 23 13 6h6L9 23H3Zm11 3L23 10l6 11-3 5H14Z" fill="currentColor"/></svg><span>SCENIC</span></a>
-      <nav id="main-nav"></nav>
+      <a class="brand" href="#explore" aria-label="누비길 홈"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M3 23 13 6h6L9 23H3Zm11 3L23 10l6 11-3 5H14Z" fill="currentColor"/></svg><span>SCENIC</span></a>
+      <p class="brand-note">풍경으로 고르는 드라이브</p>
+      <nav id="main-nav" aria-label="보조 웹 데모 메뉴"></nav>
+      <p class="sidebar-note"><strong>DRIVE YOUR SCENE</strong>코스를 살펴보고<br>좋은 순간을 남겨보세요.</p>
 
     </aside>
     <div class="workspace">
@@ -25,11 +27,11 @@
         <div class="topbar-right"><button id="drive-mode-toggle" class="mode-pill" type="button" aria-pressed="false"><span class="connection-dot"></span><span id="mode-label">정차 모드</span></button><time id="clock"></time></div>
       </header>
       <main id="main-content" tabindex="-1"></main>
-      <footer class="app-footer"><span>웹 데모 · 차량 미연결</span></footer>
+      <footer class="app-footer"><strong>누비길</strong><span>보조 웹 데모 · 차량 미연결</span></footer>
     </div>
   </div>
   <div id="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
-  <dialog id="video-dialog" class="video-dialog"><div class="dialog-title"><div><span class="eyebrow">YOUR MOMENT</span><h2 id="video-dialog-title">여정 기록</h2></div><button id="close-video" class="icon-button" aria-label="영상 닫기">✕</button></div><video id="clip-player" controls playsinline></video><p class="muted">개인 기기에 저장된 영상입니다. 자동 업로드되거나 공유되지 않습니다.</p></dialog>
+  <dialog id="video-dialog" class="video-dialog"><div class="dialog-title"><div><span class="eyebrow">YOUR MOMENT</span><h2 id="video-dialog-title">여정 기록</h2></div><button id="close-video" class="icon-button" aria-label="영상 닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><video id="clip-player" controls playsinline></video><p class="muted">개인 기기에 저장된 영상입니다. 자동 업로드되거나 공유되지 않습니다.</p></dialog>
   <input id="audio-file-input" type="file" accept="audio/*" hidden>
   <input id="video-file-input" type="file" accept="video/*" hidden>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="" defer></script>

@@ -4,7 +4,7 @@
 html,body{margin:0;width:100%;height:100%;overflow:hidden}
 button{font:inherit;cursor:pointer}
 [hidden]{display:none!important}
-.map-page{height:100%;display:grid;grid-template-rows:auto minmax(0,1fr) auto;background:#f5f5f5}
+.map-page{height:100%;display:grid;grid-template-rows:auto minmax(0,1fr);background:#f5f5f5}
 .map-header{display:flex;gap:16px;align-items:center;padding:14px 18px;border-bottom:1px solid #dfe1e4;background:#ffffff}
 .map-heading{flex:1;min-width:0}
 h1{font-size:1.04rem;letter-spacing:-.025em;line-height:1.4;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:650}
@@ -19,8 +19,7 @@ h1{font-size:1.04rem;letter-spacing:-.025em;line-height:1.4;margin:0;white-space
 .message-icon{font-size:2rem;color:#656970;line-height:1.2;margin-bottom:16px}
 .map-message h2{font-size:1.12rem;letter-spacing:-.035em;line-height:1.5;margin:0 0 10px;font-weight:600}
 .map-message p{max-width:35rem;font-size:.83rem;line-height:1.8;color:#656970;margin:0;white-space:pre-line;overflow-wrap:anywhere}
-.map-footer{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 14px;padding:9px 16px;background:#ffffff;border-top:1px solid #dfe1e4;font-size:.69rem;line-height:1.5;color:#656970}
 .stop-label{max-width:240px;padding:8px 11px;border:1px solid #c4c7cb;border-radius:5px;background:#ffffff;color:#17191c;font-size:13px;line-height:1.35;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .current-location{width:18px;height:18px;border:3px solid #ffffff;border-radius:50%;background:#17191c;box-shadow:0 0 0 2px #17191c30;pointer-events:none}
-@media(max-width:420px){.map-header{padding:11px 13px;gap:10px}.map-heading p{font-size:.72rem}.map-footer{padding:7px 11px;font-size:.65rem}.map-message{padding:18px}#map-retry{padding-inline:10px}}
-@media(max-height:270px){.map-header{padding:8px 12px}.map-heading p{display:none}.map-footer{padding:5px 10px}.message-icon{display:none}.map-message{padding:12px}.map-message h2{font-size:1rem;margin-bottom:5px}.map-message p{font-size:.77rem;line-height:1.5}}
+@media(max-width:420px){.map-header{padding:11px 13px;gap:10px}.map-heading p{font-size:.72rem}.map-message{padding:18px}#map-retry{padding-inline:10px}}
+@media(max-height:270px){.map-header{padding:8px 12px}.map-heading p{display:none}.message-icon{display:none}.map-message{padding:12px}.map-message h2{font-size:1rem;margin-bottom:5px}.map-message p{font-size:.77rem;line-height:1.5}}
