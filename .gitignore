@@ -28,3 +28,6 @@ android/local.properties
 .cache/
 outputs/
 work/
+
+# Public contest release package
+!apk/누비길_누비길_release.apk
